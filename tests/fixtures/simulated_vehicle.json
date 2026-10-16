@@ -1,0 +1,20 @@
+{
+  "name": "simulated-fixture-vehicle",
+  "vin": "SIMULATEDVIN00002",
+  "protocol": "ISO 15765-4 CAN (11-bit ID, 500 kbit/s) [simulated]",
+  "readings": [
+    { "pid": "0104", "value": 27.5 },
+    { "pid": "0105", "value": 92.0 },
+    { "pid": "010C", "value": 1450.0 },
+    { "pid": "010D", "value": 42.0 },
+    { "pid": "010F", "value": 31.0 },
+    { "pid": "0110", "value": 6.8 },
+    { "pid": "0111", "value": 18.4 },
+    { "pid": "012F", "value": 63.0 },
+    { "pid": "0142", "value": 13.9 }
+  ],
+  "trouble_codes": ["P0300", "P0420", "P0500"],
+  "failure": "none",
+  "latency_s": 0.0,
+  "notes": "Fixture used by the automated tests. Every value is simulated, none was captured from a vehicle."
+}

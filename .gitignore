@@ -7,20 +7,22 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+#   Build directories are anchored to the repository root on purpose: a bare "lib/" or
+#   "var/" pattern would also ignore a source directory with that name anywhere in the tree.
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -183,12 +185,8 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# PyCharm
-#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#   and can be added to the global gitignore or merged into this file.  For a more nuclear
-#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
+# JetBrains (PyCharm) and VS Code: see the project specific section at the end of this
+# file, which ignores local IDE state while keeping a shared settings file committable.
 
 # Abstra
 #   Abstra is an AI-powered process automation framework.
@@ -218,3 +216,42 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --------------------------------------------------------------------------- #
+# Project specific (iran-obd-tuner)
+# --------------------------------------------------------------------------- #
+
+# Local configuration: machine specific settings. config/example.toml is the committed
+# template, config/local.toml is the developer's own copy and must not be committed.
+config/local.toml
+*.local.toml
+
+# Environment files. The application does not read .env files (it reads IRAN_OBD_TUNER_*
+# variables), but they are ignored as a safety net for tools that do.
+.env
+.env.*
+
+# Generated artefacts: diagnostic reports, log files, live data captures. Everything the
+# application writes at runtime belongs under output/ so nothing lands in the source tree.
+output/
+/reports/
+*.log
+
+# Bench/tuning working data: ROM images, calibration dumps, research captures. These are
+# frequently large, may carry licensing restrictions and must never be committed. If a
+# small fixture is genuinely required, force add it (git add -f) and justify it in the PR.
+knowledge/local/
+*.bin
+*.hex
+*.rom
+
+# IDE and editor state. A shared settings file stays committable; the rest is local noise.
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+Thumbs.db
+Desktop.ini
+*.bak
+*.orig

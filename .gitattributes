@@ -1,0 +1,28 @@
+# Normalise line endings in the repository: the index is LF, developers may work on
+# Windows (CRLF checkout) or Linux (LF checkout) without creating diff noise.
+* text=auto
+
+*.py text eol=lf
+*.pyi text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.cfg text eol=lf
+*.txt text eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Vehicle / ECU data must never be mangled by line ending conversion.
+*.bin binary
+*.hex binary
+*.rom binary
+*.a2l text working-tree-encoding=UTF-8
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.zip binary

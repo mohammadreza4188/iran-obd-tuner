@@ -1,0 +1,57 @@
+# Iran OBD Tuner — example configuration
+#
+# Copy this file to config/local.toml and edit it for your machine:
+#     cp config/example.toml config/local.toml
+#
+# config/local.toml is ignored by Git (machine specific settings must not be committed).
+# Every value can also be supplied through environment variables; the variable name is
+# IRAN_OBD_TUNER_<FIELD_NAME_UPPERCASED> (e.g. IRAN_OBD_TUNER_ADAPTER, IRAN_OBD_TUNER_LOG_LEVEL).
+# Precedence: built-in defaults  <  this file  <  environment variables.
+#
+# The default configuration is safe: it talks to the simulated adapter only and performs
+# read-only diagnostics. No option in this file can enable ECU write or calibration operations.
+
+# Adapter to use. See `iran-obd-tuner adapters` for declared adapters and their status.
+# "mock" is the only implemented adapter in this snapshot.
+# Env: IRAN_OBD_TUNER_ADAPTER
+adapter = "mock"
+
+# Serial port of a real adapter (only relevant for adapters that are declared but not
+# implemented yet, e.g. "elm327"). Leave unset for the mock adapter.
+# Env: IRAN_OBD_TUNER_SERIAL_PORT
+# serial_port = "COM3"
+
+# Serial baud rate of the adapter. ELM327 clones are usually 38400; some ship with 115200.
+# Env: IRAN_OBD_TUNER_SERIAL_BAUDRATE
+serial_baudrate = 38400
+
+# Seconds to wait for the adapter to answer a connection attempt.
+# Env: IRAN_OBD_TUNER_CONNECT_TIMEOUT_S
+connect_timeout_s = 5.0
+
+# Seconds to wait for the response of a single diagnostic request.
+# Env: IRAN_OBD_TUNER_COMMAND_TIMEOUT_S
+command_timeout_s = 2.0
+
+# OBD-II service 01 parameters read by the diagnostic workflow, in request form
+# (mode + PID). See src/iran_obd_tuner/core/pids.py for the built-in catalogue.
+# Env: IRAN_OBD_TUNER_LIVE_DATA_PIDS (comma separated)
+live_data_pids = ["010C", "010D", "0105", "0111", "010F", "0142"]
+
+# Logging level: DEBUG, INFO, WARNING, ERROR or CRITICAL.
+# Env: IRAN_OBD_TUNER_LOG_LEVEL
+log_level = "INFO"
+
+# Optional log file. Logs go to stderr when unset. Parent directories are created.
+# Env: IRAN_OBD_TUNER_LOG_FILE
+# log_file = "output/iran-obd-tuner.log"
+
+# Directory for generated artefacts (diagnostic reports, logs, later live-data captures).
+# Env: IRAN_OBD_TUNER_OUTPUT_DIR
+output_dir = "output"
+
+# Optional extra knowledge data directory. Files placed here override the bundled
+# knowledge database (currently: dtc_catalog.json). Use it for research data that is
+# not ready to be committed, e.g. "knowledge/local".
+# Env: IRAN_OBD_TUNER_KNOWLEDGE_DIR
+# knowledge_dir = "knowledge/local"

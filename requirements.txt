@@ -1,3 +1,13 @@
+# Full runtime dependency set of the desktop application (pip path).
+#
+# The authoritative, per-group list lives in pyproject.toml under
+# [project.optional-dependencies]; keep the two in sync when a version changes.
+#   pip install -e .                -> core only (standard library, no dependency)
+#   pip install -e ".[dev]"         -> core + pytest + ruff
+#   pip install -e ".[full]"        -> everything listed below
+#
+# Verified on Python 3.11 / 3.12 (see docs/development.md for known upstream caveats).
+
 # Core
 python-obd>=0.7.1
 python-can>=4.3.1

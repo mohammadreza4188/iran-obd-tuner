@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iran-obd-tuner"
+dynamic = ["version"]
+description = "OBD-II diagnostics and (future) bench ECU calibration tooling for the Iranian market"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mohammad Reza" }, { name = "Abbas" }]
+keywords = ["obd", "obd-ii", "diagnostics", "dtc", "automotive", "ecu", "tuning", "iran"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Testing",
+]
+# The core package is standard-library only on purpose: the diagnostic workflow runs and is
+# testable without a vehicle, an adapter, a GUI toolkit or a network connection. Everything
+# that touches real hardware or a GUI lives in the optional extras below.
+dependencies = []
+
+[project.optional-dependencies]
+# ELM327 / serial adapters (phase 1). python-obd is unmaintained upstream: verify it on your
+# Python version before relying on it, see docs/development.md.
+obd = ["python-obd>=0.7.1", "pyserial>=3.5"]
+# Raw CAN interfaces (phase 2+): SocketCAN, PCAN, Kvaser, ...
+can = ["python-can>=4.3.1"]
+# Bench (off-vehicle) ECU work (phase 4+): UDS client and CRC helpers.
+bench = ["udsoncan>=1.21.2", "crcmod>=1.7"]
+# Desktop user interface (phase 1).
+gui = ["PySide6>=6.6.0", "pyqtgraph>=0.13.3"]
+# Everything needed to work on this repository.
+dev = ["pytest>=8.0", "ruff>=0.6"]
+# Convenience meta extra: full desktop application runtime.
+full = [
+  "python-obd>=0.7.1",
+  "pyserial>=3.5",
+  "python-can>=4.3.1",
+  "udsoncan>=1.21.2",
+  "crcmod>=1.7",
+  "PySide6>=6.6.0",
+  "pyqtgraph>=0.13.3",
+]
+
+[project.scripts]
+iran-obd-tuner = "iran_obd_tuner.app.cli:main"
+
+[project.urls]
+Repository = "https://github.com/mohammadreza4188/iran-obd-tuner"
+Issues = "https://github.com/mohammadreza4188/iran-obd-tuner/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"iran_obd_tuner.database" = ["data/*.json"]
+
+[tool.setuptools.dynamic]
+version = { attr = "iran_obd_tuner.__version__" }
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+filterwarnings = ["error::DeprecationWarning:iran_obd_tuner.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "RET", "SIM", "PTH"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["iran_obd_tuner"]
+
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "lf"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PTH"]
