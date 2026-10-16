@@ -67,7 +67,7 @@ class ObdService:
         self._connected = False
         self._t0 = time.time()
         self._sim_codes: list[DtcItem] = []
-        self.on_log: Callable[[str], None] = lambda _msg: None
+        self.on_log: Callable[..., None] = lambda *_a, **_k: None
 
     @property
     def policy(self) -> SafetyPolicy:
@@ -90,7 +90,7 @@ class ObdService:
             for p in obd.scan_serial():
                 ports.append(str(p))
         except Exception as exc:  # pragma: no cover
-            self.on_log(f"Port scan failed: {exc}")
+            self.on_log("msg.port_scan_failed", exc)
         return ports
 
     def connect(self, port: str = "Auto", simulation: bool = False) -> bool:
@@ -104,31 +104,31 @@ class ObdService:
                 DtcItem("P0300", "Random misfire"),
                 DtcItem("P0171", "System too lean bank 1"),
             ]
-            self.on_log("Simulation mode started")
+            self.on_log("msg.sim_started")
             return True
 
         if obd is None:
-            self.on_log("python-obd is not installed")
+            self.on_log("msg.obd_missing")
             return False
 
         try:
-            self.on_log(f"Opening port {port}")
+            self.on_log("msg.opening_port", port)
             if port == "Auto":
                 self._conn = obd.OBD(fast=False)
             else:
                 self._conn = obd.OBD(portstr=port, fast=False)
 
             if not self._conn.is_connected():
-                self.on_log("No response from adapter")
+                self.on_log("msg.no_response")
                 self._conn = None
                 return False
 
             self._connected = True
-            self.on_log(f"Connected via {self._conn.port_name()}")
-            self.on_log(f"Protocol: {self._conn.protocol_name()}")
+            self.on_log("msg.connected_via", self._conn.port_name())
+            self.on_log("msg.protocol", self._conn.protocol_name())
             return True
         except Exception as exc:
-            self.on_log(f"Connect error: {exc}")
+            self.on_log("msg.connect_error", exc)
             self._conn = None
             self._connected = False
             return False
@@ -139,7 +139,7 @@ class ObdService:
                 self._conn.close()
             self._conn = None
         if self._connected:
-            self.on_log("Adapter closed")
+            self.on_log("msg.adapter_closed")
         self._connected = False
         self._sim = False
 
@@ -180,7 +180,7 @@ class ObdService:
                 items.append(DtcItem(str(code), str(desc or "")))
             return items
         except Exception as exc:
-            self.on_log(f"DTC read error: {exc}")
+            self.on_log("msg.dtc_read_error", exc)
             return []
 
     def clear_dtc(self) -> bool:
@@ -207,7 +207,7 @@ class ObdService:
 
         if self._sim:
             self._sim_codes.clear()
-            self.on_log("Simulation DTCs cleared")
+            self.on_log("msg.dtc_cleared_sim")
             return True
 
         if self._conn is None or obd is None:
@@ -215,10 +215,10 @@ class ObdService:
 
         try:
             self._conn.query(obd.commands.CLEAR_DTC)
-            self.on_log("Clear DTC requested")
+            self.on_log("msg.clear_dtc_requested")
             return True
         except Exception as exc:
-            self.on_log(f"Clear DTC error: {exc}")
+            self.on_log("msg.clear_dtc_error", exc)
             return False
 
     def _query(self, command, fallback: float = 0.0) -> float:

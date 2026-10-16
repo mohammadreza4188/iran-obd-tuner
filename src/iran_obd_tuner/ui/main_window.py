@@ -396,7 +396,7 @@ class MainWindow(QMainWindow):
         prev_count = self.port_combo.count()
         self._reload_ports()
         new_count = self.port_combo.count()
-        self._append_log(f"Port scan: {prev_count} -> {new_count} ports")
+        self._append_log("msg.port_scan", prev_count, new_count)
 
     def _update_status_pill(self) -> None:
         t = COPY[self.lang]
@@ -436,7 +436,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 COPY[self.lang]["title"],
-                "Connection failed. Try simulation mode or check the adapter.",
+                COPY[self.lang]["connection_failed"],
             )
             return
 
@@ -491,14 +491,14 @@ class MainWindow(QMainWindow):
             count = self.recorder.count
             self.record_btn.setText("⏺")
             self.record_btn.setStyleSheet("")
-            self._append_log(f"Recording stopped ({count} samples): {path}")
+            self._append_log("msg.recording_stopped", count, str(path))
         else:
             path = self.recorder.start()
             self.record_btn.setText("⏹")
             self.record_btn.setStyleSheet(
                 "background:#c0392b; color:#f5f9ff; border:none; border-radius:6px;"
             )
-            self._append_log(f"Recording started: {path}")
+            self._append_log("msg.recording_started", str(path))
 
     def _clear_dtc(self) -> None:
         """Clear stored trouble codes — refused by the safety policy in this build.
@@ -519,12 +519,30 @@ class MainWindow(QMainWindow):
         if cleared:
             self._refresh_dtc()
 
-    def _append_log(self, message: str) -> None:
+    def _translate_log(self, message: str, args: tuple) -> str:
+        """Translate a log message: if it's a known i18n key, translate it; else pass through."""
+        t = COPY[self.lang]
+        messages = t.get("messages", {})
+        if message in messages:
+            template = messages[message]
+            try:
+                return template.format(*args) if args else template
+            except (IndexError, KeyError):
+                return template
+        if args:
+            try:
+                return message.format(*args)
+            except (IndexError, KeyError):
+                return message
+        return message
+
+    def _append_log(self, message: str, *args: object) -> None:
         from datetime import datetime
 
+        text = self._translate_log(message, args)
         stamp = datetime.now().strftime("%H:%M:%S")
-        self.log_list.insertItem(0, f"{stamp}  {message}")
-        self.status_bar.showMessage(message, 5000)
+        self.log_list.insertItem(0, f"{stamp}  {text}")
+        self.status_bar.showMessage(text, 5000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.timer.stop()
