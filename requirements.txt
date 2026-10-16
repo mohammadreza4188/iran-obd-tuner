@@ -9,12 +9,11 @@
 # Verified on Python 3.11 / 3.12 (see docs/development.md for known upstream caveats).
 
 # Core
-python-obd>=0.7.1
+# NOTE: the PyPI distribution name of python-OBD is "obd" (the project is commonly called
+# python-OBD, but "python-obd" does not exist on PyPI and cannot be installed). It pulls
+# pyserial and pint transitively.
+obd>=0.7.1
 python-can>=4.3.1
 udsoncan>=1.21.2
 PySide6>=6.6.0
-pyqtgraph>=0.13.3
-
-# Utilities
 pyserial>=3.5
-crcmod>=1.7

@@ -30,9 +30,10 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# ELM327 / serial adapters (phase 1). python-obd is unmaintained upstream: verify it on your
-# Python version before relying on it, see docs/development.md.
-obd = ["python-obd>=0.7.1", "pyserial>=3.5"]
+# ELM327 / serial adapters (phase 1). The PyPI distribution name of python-OBD is "obd"
+# (project name python-OBD); it is unmaintained upstream and pulls pint transitively —
+# verify it on your Python version before relying on it, see docs/development.md.
+obd = ["obd>=0.7.1", "pyserial>=3.5"]
 # Raw CAN interfaces (phase 2+): SocketCAN, PCAN, Kvaser, ...
 can = ["python-can>=4.3.1"]
 # Bench (off-vehicle) ECU work (phase 4+): UDS client and CRC helpers.
@@ -43,7 +44,7 @@ gui = ["PySide6>=6.6.0", "pyqtgraph>=0.13.3"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 # Convenience meta extra: full desktop application runtime.
 full = [
-  "python-obd>=0.7.1",
+  "obd>=0.7.1",
   "pyserial>=3.5",
   "python-can>=4.3.1",
   "udsoncan>=1.21.2",
