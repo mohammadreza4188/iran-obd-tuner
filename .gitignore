@@ -255,3 +255,6 @@ Thumbs.db
 Desktop.ini
 *.bak
 *.orig
+
+# Live data logs
+logs/

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from iran_obd_tuner.diagnostics.recorder import CsvRecorder
 from iran_obd_tuner.core.exceptions import SafetyGuardError
 from iran_obd_tuner.diagnostics.obd_service import LiveSample, ObdService
 from iran_obd_tuner.ui.gauges import GaugeCard
@@ -93,6 +94,7 @@ class MainWindow(QMainWindow):
         self.lang: Lang = "fa"
         self.service = ObdService()
         self.service.on_log = self._append_log
+        self.recorder = CsvRecorder()
         self._page = 0
 
         self.setMinimumSize(1000, 700)
@@ -173,6 +175,12 @@ class MainWindow(QMainWindow):
         tool.addWidget(self.port_combo)
         tool.addWidget(self.refresh_ports_btn)
         tool.addWidget(self.connect_btn)
+        self.record_btn = QPushButton("⏺")
+        self.record_btn.setMinimumHeight(40)
+        self.record_btn.setMinimumWidth(50)
+        self.record_btn.setEnabled(False)
+        self.record_btn.clicked.connect(self._toggle_recording)
+        tool.addWidget(self.record_btn)
         tool.addStretch()
         tool.addWidget(self.prev_btn)
         tool.addWidget(self.page_label)
@@ -406,6 +414,9 @@ class MainWindow(QMainWindow):
             self.timer.stop()
             self.spark.clear()
             self._zero_gauges()
+            if self.recorder.recording:
+                self._toggle_recording()
+            self.record_btn.setEnabled(False)
             self.connect_btn.setText(COPY[self.lang]["connect"])
             self.port_combo.setEnabled(True)
             self.refresh_ports_btn.setEnabled(True)
@@ -427,6 +438,7 @@ class MainWindow(QMainWindow):
         self.connect_btn.setText(COPY[self.lang]["disconnect"])
         self.port_combo.setEnabled(False)
         self.refresh_ports_btn.setEnabled(False)
+        self.record_btn.setEnabled(True)
         self.mode_combo.setEnabled(False)
         self._update_status_pill()
         self._refresh_dtc()
@@ -439,6 +451,8 @@ class MainWindow(QMainWindow):
     def _tick(self) -> None:
         sample = self.service.read_live()
         self._apply_sample(sample)
+        if self.recorder.recording:
+            self.recorder.write(sample)
 
     def _apply_sample(self, s: LiveSample) -> None:
         self.gauges["rpm"].set_value(s.rpm)
@@ -461,6 +475,22 @@ class MainWindow(QMainWindow):
         for item in items:
             text = f"{item.code}  —  {item.description}"
             self.dtc_list.addItem(QListWidgetItem(text))
+
+    def _toggle_recording(self) -> None:
+        """Start or stop recording live samples to CSV."""
+        if self.recorder.recording:
+            path = self.recorder.stop()
+            count = self.recorder.count
+            self.record_btn.setText("⏺")
+            self.record_btn.setStyleSheet("")
+            self._append_log(f"Recording stopped ({count} samples): {path}")
+        else:
+            path = self.recorder.start()
+            self.record_btn.setText("⏹")
+            self.record_btn.setStyleSheet(
+                "background:#c0392b; color:#f5f9ff; border:none; border-radius:6px;"
+            )
+            self._append_log(f"Recording started: {path}")
 
     def _clear_dtc(self) -> None:
         """Clear stored trouble codes — refused by the safety policy in this build.
