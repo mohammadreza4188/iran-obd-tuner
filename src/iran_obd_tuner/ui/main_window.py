@@ -98,6 +98,9 @@ class MainWindow(QMainWindow):
         self._page = 0
 
         self.setMinimumSize(1000, 700)
+        self.status_bar = self.statusBar()
+        self.recording_label = QLabel("")
+        self.status_bar.addPermanentWidget(self.recording_label)
         self._build_ui()
         self._apply_language()
         self._apply_dark_theme()
@@ -366,6 +369,8 @@ class MainWindow(QMainWindow):
             }
             QPushButton:disabled { background: #3d3f46; color: #9b9ca4; }
             QLabel { color: #f3f4f6; }
+            QStatusBar { background: #26272c; color: #9b9ca4; }
+            QStatusBar::item { border: none; }
             """
         )
 
@@ -453,6 +458,9 @@ class MainWindow(QMainWindow):
         self._apply_sample(sample)
         if self.recorder.recording:
             self.recorder.write(sample)
+            self.recording_label.setText(f"⏺ {self.recorder.count} samples")
+        else:
+            self.recording_label.setText("")
 
     def _apply_sample(self, s: LiveSample) -> None:
         self.gauges["rpm"].set_value(s.rpm)
@@ -516,6 +524,7 @@ class MainWindow(QMainWindow):
 
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log_list.insertItem(0, f"{stamp}  {message}")
+        self.status_bar.showMessage(message, 5000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.timer.stop()
