@@ -32,6 +32,7 @@ from iran_obd_tuner.core.exceptions import SafetyGuardError
 from iran_obd_tuner.diagnostics.obd_service import LiveSample, ObdService
 from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang
+from iran_obd_tuner.ui.icon import build_icon
 
 
 class Sparkline(QWidget):
@@ -98,6 +99,7 @@ class MainWindow(QMainWindow):
         self._page = 0
 
         self.setMinimumSize(1000, 700)
+        self.setWindowIcon(build_icon())
         self.status_bar = self.statusBar()
         self.recording_label = QLabel("")
         self.status_bar.addPermanentWidget(self.recording_label)
@@ -360,15 +362,24 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow, QWidget { background: #1a1b1f; color: #f3f4f6; }
+
             QComboBox, QListWidget {
-                background: #313238; border: 1px solid #3d3f46; border-radius: 6px; padding: 6px;
+                background: #313238; border: 1px solid #3d3f46; border-radius: 6px;
+                padding: 6px; selection-background-color: #2f86e8;
             }
+            QComboBox:hover, QListWidget:hover { border: 1px solid #4d5058; }
+            QComboBox:focus { border: 1px solid #2f86e8; }
+
             QPushButton {
-                background: #2f86e8; color: #f5f9ff; border: none;
-                border-radius: 6px; padding: 8px 14px;
+                background: #2f86e8; color: #f5f9ff;
+                border: none; border-radius: 6px; padding: 8px 14px;
             }
-            QPushButton:disabled { background: #3d3f46; color: #9b9ca4; }
+            QPushButton:hover { background: #4a97ec; }
+            QPushButton:pressed { background: #2570c4; }
+            QPushButton:disabled { background: #3d3f46; color: #6b6d75; }
+
             QLabel { color: #f3f4f6; }
+
             QStatusBar { background: #26272c; color: #9b9ca4; }
             QStatusBar::item { border: none; }
             """
@@ -379,6 +390,7 @@ class MainWindow(QMainWindow):
         if data in ("fa", "en"):
             self.lang = data  # type: ignore[assignment]
             self._apply_language()
+            self._reload_ports()
 
     def _reload_ports(self) -> None:
         current = self.port_combo.currentText() if self.port_combo.count() else "Auto"
