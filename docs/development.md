@@ -17,6 +17,9 @@ source .venv/Scripts/activate     # Windows (git-bash)  |  Linux/macOS: source .
 
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"   # کد + pytest + ruff
+
+# در صورت کار روی داشبورد گرافیکی (فاز ۱):
+python -m pip install -e ".[gui]"   # PySide6
 ```
 
 بررسی صحت نصب:
@@ -35,7 +38,7 @@ python -m iran_obd_tuner diagnose
 | extra | محتوا | چه زمانی |
 |---|---|---|
 | `dev` | pytest, ruff | همیشه (برای همه اعضا) |
-| `obd` | python-obd, pyserial | کار روی آداپتور واقعی ELM327 (فاز ۱) |
+| `obd` | بسته python-OBD (نام PyPI: `obd`)، pyserial | کار روی آداپتور واقعی ELM327 (فاز ۱) |
 | `can` | python-can | کار روی CAN (فاز ۲+) |
 | `bench` | udsoncan, crcmod | کار روی Bench/UDS و چک‌سام (فاز ۴+) |
 | `gui` | PySide6, pyqtgraph | کار روی رابط گرافیکی (فاز ۱) |
@@ -71,10 +74,15 @@ cp config/example.toml config/local.toml
 python scripts/check.py                    # compile + ruff check + ruff format --check + pytest
 python -m pytest -q                        # فقط تست‌ها
 python -m pytest tests/unit -q             # فقط یونیت‌تست‌ها
+python -m pytest tests/integration -q      # تست‌های CLI و GUI (GUI بدون [gui] skip می‌شود)
 python -m pytest -q -k diagnostic          # انتخاب بر اساس نام
 python -m ruff check . && python -m ruff format .
 python -m iran_obd_tuner diagnose --json | python -m json.tool
 python -m iran_obd_tuner config            # تنظیمات نهایی و منبع آن‌ها
+
+# داشبورد گرافیکی (نیازمند [gui])
+iran-obd-tuner-gui
+QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نمایشگر/CI، بدون باز کردن پنجره
 ```
 
 `scripts/check.py` همان سه گیت CI را روی هر پلتفرمی اجرا می‌کند و اگر pytest/ruff نصب نبود،
@@ -89,6 +97,11 @@ python -m iran_obd_tuner config            # تنظیمات نهایی و منب
   `MockObdAdapter` و `MockScenario` (با `FailureMode` برای شبیه‌سازی timeout/خطای فریم) تست شود.
 - نام فایل‌ها یکتا باشد (`tests/unit/test_x.py` و `tests/integration/test_y.py`) تا با
   حالت پیش‌فرض import در pytest تداخل نکند.
+- تست‌های وابسته به Qt در `tests/integration/` با `pytest.importorskip("PySide6")` و پلتفرم
+  `offscreen` نوشته شوند (الگو: `tests/integration/test_gui_window.py`)، تا بدون نصب `[gui]`
+  خودکار skip شوند و مجموعه تست هرگز به نمایشگر نیاز نداشته باشد.
+- هیچ تستی نباید پورت سریال باز کند: مسیر واقعی آداپتور با `monkeypatch` غیرفعال می‌شود
+  (الگو: `tests/unit/test_obd_service.py`).
 
 ## ۵. افزودن یک قابلیت: مسیرهای متعارف
 
@@ -138,7 +151,9 @@ extras سخت‌افزاری/گرافیکی در CI نصب **نمی‌شوند**
 | `unknown key(s) in ...` | خطای تایپی در کلید TOML | مقایسه با `config/example.toml` |
 | `unknown adapter '...'` | نام آداپتور اشتباه | `iran-obd-tuner adapters` |
 | `adapter 'elm327' is declared but not implemented` | فاز ۱ پیاده نشده | استفاده از `mock` |
-| نصب `python-obd` شکست می‌خورد | بسته قدیمی (۰٫۷٫۱) و پایتون جدید | تست روی پایتون ۳٫۱۱/۳٫۱۲؛ در صورت لزوم با تیم هماهنگ شود |
+| نصب بسته OBD شکست می‌خورد | نام درست روی PyPI `obd` است، نه `python-obd` | از `pip install -e ".[obd]"` استفاده کنید (نام در `requirements.txt` توضیح داده شده) |
+| `ModuleNotFoundError: PySide6` هنگام اجرای GUI | extras نصب نشده | `python -m pip install -e ".[gui]"` (CLI و تست‌ها بدون آن هم کار می‌کنند) |
+| پنجره GUI در سرور/CI باز نمی‌شود | نبود نمایشگر | `QT_QPA_PLATFORM=offscreen` را ست کنید |
 | نصب PySide6 روی Windows شکست می‌خورد | نبود wheel مناسب نسخه پایتون | اجرای `pip install "PySide6>=6.6.0"` با نسخه پایتون پیشنهادی خود بسته |
 | نبود شبکه/PyPI | محدودیت شبکه | اجرای تست‌ها بدون extras ممکن است؛ `pytest` از `src` استفاده می‌کند |
 | diffهای خالی با تغییر خط‌پایان | CRLF/LF | `.gitattributes` و `.editorconfig` را رعایت کنید (`git add --renormalize .`) |

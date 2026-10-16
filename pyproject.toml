@@ -56,6 +56,11 @@ full = [
 [project.scripts]
 iran-obd-tuner = "iran_obd_tuner.app.cli:main"
 
+[project.gui-scripts]
+# Desktop dashboard (phase 1). Needs the optional [gui] extra; on Windows this creates a
+# windowless launcher, which is what a GUI application should have.
+iran-obd-tuner-gui = "iran_obd_tuner.app.gui_main:main"
+
 [project.urls]
 Repository = "https://github.com/mohammadreza4188/iran-obd-tuner"
 Issues = "https://github.com/mohammadreza4188/iran-obd-tuner/issues"

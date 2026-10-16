@@ -54,7 +54,11 @@ class GaugeWidget(QWidget):
         title_font.setPointSize(10)
         title_font.setBold(True)
         painter.setFont(title_font)
-        painter.drawText(self.rect().adjusted(8, 8, -8, -8), Qt.AlignHCenter | Qt.AlignTop, self._label)
+        painter.drawText(
+            self.rect().adjusted(8, 8, -8, -8),
+            Qt.AlignHCenter | Qt.AlignTop,
+            self._label,
+        )
 
         side = min(self.width(), self.height() - 36)
         cx = self.width() / 2

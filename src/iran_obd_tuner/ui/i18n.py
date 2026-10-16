@@ -46,6 +46,9 @@ COPY = {
         "dtc_title": "کدهای خطا",
         "no_dtc": "کد خطایی نیست.",
         "clear_dtc": "پاک کردن کدها",
+        "clear_blocked": (
+            "پاک کردن کدهای خطا در این نسخه غیرفعال است (فقط‌خواندنی) و نیازمند تأیید تیم است."
+        ),
         "refresh_dtc": "خواندن مجدد",
         "settings_lang": "زبان",
         "settings_mode": "حالت اتصال",
@@ -93,6 +96,9 @@ COPY = {
         "dtc_title": "Trouble codes",
         "no_dtc": "No trouble codes.",
         "clear_dtc": "Clear codes",
+        "clear_blocked": (
+            "Clearing trouble codes is disabled in this build (read-only) and needs team approval."
+        ),
         "refresh_dtc": "Refresh",
         "settings_lang": "Language",
         "settings_mode": "Connection mode",

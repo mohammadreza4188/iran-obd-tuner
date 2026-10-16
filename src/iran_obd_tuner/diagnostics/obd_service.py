@@ -1,16 +1,35 @@
-"""OBD connection layer: real python-OBD or simulation fallback."""
+"""OBD connection layer for the dashboard: real python-OBD or simulation fallback.
+
+Scope and status:
+
+* implemented — simulated live data and simulated trouble codes (no vehicle involved),
+  port listing, and the python-OBD read path (VIN-less live data + stored trouble codes);
+* **read-only by default** — :meth:`ObdService.clear_dtc` passes through
+  :func:`iran_obd_tuner.core.safety.require` and is refused by the shipped policy;
+* not implemented — measurement models and units shared with the rest of the project
+  (this module keeps its own :class:`LiveSample`), and unification with
+  :class:`iran_obd_tuner.hardware.base.ObdAdapter` /
+  :class:`iran_obd_tuner.diagnostics.service.DiagnosticService`. Tracked in
+  docs/architecture.md.
+
+Import safety: ``obd`` (python-OBD) is imported lazily inside a ``try`` block and is an
+optional dependency, and no adapter is opened at import time — a missing python-OBD or a
+missing adapter degrades to "not available" instead of failing or connecting.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import math
-import random
 import time
-from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from iran_obd_tuner.core.safety import DEFAULT_POLICY, OperationClass, SafetyPolicy, require
 
 try:
-    import obd  # type: ignore
-except ImportError:  # pragma: no cover
+    import obd  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - exercised only without the optional extra
     obd = None
 
 
@@ -33,15 +52,27 @@ class DtcItem:
 
 
 class ObdService:
-    """Thin wrapper around python-OBD with a simulation mode for UI work."""
+    """Thin wrapper around python-OBD with a simulation mode for UI work.
 
-    def __init__(self) -> None:
+    Args:
+        policy: Safety policy for state-changing operations. The default policy allows
+            read-only work only, so :meth:`clear_dtc` refuses unless a caller passes an
+            explicitly permissive policy (which the application never does).
+    """
+
+    def __init__(self, *, policy: SafetyPolicy = DEFAULT_POLICY) -> None:
+        self._policy = policy
         self._conn = None
         self._sim = False
         self._connected = False
         self._t0 = time.time()
-        self._sim_codes: List[DtcItem] = []
+        self._sim_codes: list[DtcItem] = []
         self.on_log: Callable[[str], None] = lambda _msg: None
+
+    @property
+    def policy(self) -> SafetyPolicy:
+        """Safety policy enforced for state-changing operations."""
+        return self._policy
 
     @property
     def connected(self) -> bool:
@@ -51,7 +82,7 @@ class ObdService:
     def simulation(self) -> bool:
         return self._sim
 
-    def list_ports(self) -> List[str]:
+    def list_ports(self) -> list[str]:
         ports = ["Auto"]
         if obd is None:
             return ports
@@ -104,10 +135,8 @@ class ObdService:
 
     def disconnect(self) -> None:
         if self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.close()
-            except Exception:
-                pass
             self._conn = None
         if self._connected:
             self.on_log("Adapter closed")
@@ -132,7 +161,7 @@ class ObdService:
             load=self._query(obd.commands.ENGINE_LOAD),
         )
 
-    def read_dtc(self) -> List[DtcItem]:
+    def read_dtc(self) -> list[DtcItem]:
         if not self._connected:
             return []
 
@@ -146,7 +175,7 @@ class ObdService:
             resp = self._conn.query(obd.commands.GET_DTC)
             if resp.is_null():
                 return []
-            items: List[DtcItem] = []
+            items: list[DtcItem] = []
             for code, desc in resp.value or []:
                 items.append(DtcItem(str(code), str(desc or "")))
             return items
@@ -155,8 +184,26 @@ class ObdService:
             return []
 
     def clear_dtc(self) -> bool:
-        if not self._connected:
-            return False
+        """Clear stored trouble codes (OBD service 04).
+
+        **Refused in this build.** Clearing codes changes vehicle state, so the call goes
+        through :func:`iran_obd_tuner.core.safety.require` first: with the shipped read-only
+        policy it raises :class:`~iran_obd_tuner.core.exceptions.SafetyGuardError` before any
+        command is prepared. The python-OBD call below is kept (and stays unreachable) so the
+        work is not lost; activating it requires an explicit code-level policy plus team
+        approval — see docs/architecture.md, section "Safety boundary".
+
+        Returns:
+            ``True`` when the (simulated) trouble codes were actually cleared.
+
+        Raises:
+            SafetyGuardError: Under the shipped policy, i.e. always in this build.
+        """
+        require(
+            OperationClass.STATE_CHANGING,
+            policy=self._policy,
+            detail="clear diagnostic trouble codes (OBD service 04)",
+        )
 
         if self._sim:
             self._sim_codes.clear()

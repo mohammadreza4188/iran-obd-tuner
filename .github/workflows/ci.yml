@@ -9,6 +9,8 @@ on:
 # without an OBD adapter and without the GUI or CAN dependency stacks.
 # The [obd], [can], [bench] and [gui] extras are deliberately NOT installed here: they pull
 # in compiled/GUI wheels and can only be validated manually, see docs/development.md.
+# Consequence: tests/integration/test_gui_window.py (PySide6) reports as skipped in CI; it was
+# verified locally on Windows with QT_QPA_PLATFORM=offscreen and a real PySide6 install.
 
 jobs:
   checks:

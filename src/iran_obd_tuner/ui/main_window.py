@@ -1,15 +1,19 @@
-"""Phase 1 main window: dashboard, DTC, settings, log."""
+"""Phase 1 main window: dashboard, DTC list, settings and log.
+
+Needs the optional ``[gui]`` extra (PySide6). Read-only: reading live data and stored
+trouble codes is allowed, while clearing codes is refused by the safety policy and reported
+in the UI (see :meth:`MainWindow._clear_dtc`). Constructing the window does not open an
+adapter: it only lists serial ports for the port selector, and connects on user request.
+"""
 
 from __future__ import annotations
 
 from collections import deque
-from typing import Deque, List, Tuple
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -23,9 +27,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.diagnostics.obd_service import LiveSample, ObdService
-from src.ui.gauges import GaugeCard
-from src.ui.i18n import COPY, Lang
+from iran_obd_tuner.core.exceptions import SafetyGuardError
+from iran_obd_tuner.diagnostics.obd_service import LiveSample, ObdService
+from iran_obd_tuner.ui.gauges import GaugeCard
+from iran_obd_tuner.ui.i18n import COPY, Lang
 
 
 class Sparkline(QWidget):
@@ -33,8 +38,8 @@ class Sparkline(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._rpm: Deque[float] = deque(maxlen=60)
-        self._speed: Deque[float] = deque(maxlen=60)
+        self._rpm: deque[float] = deque(maxlen=60)
+        self._speed: deque[float] = deque(maxlen=60)
         self.setMinimumHeight(220)
 
     def push(self, rpm: float, speed: float) -> None:
@@ -57,7 +62,7 @@ class Sparkline(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "—")
             return
 
-        def draw_series(values: Deque[float], color: QColor, vmax: float) -> None:
+        def draw_series(values: deque[float], color: QColor, vmax: float) -> None:
             if not values:
                 return
             w = max(1, self.width() - 20)
@@ -65,7 +70,7 @@ class Sparkline(QWidget):
             step = w / max(1, len(values) - 1)
             pen = QPen(color, 2)
             painter.setPen(pen)
-            points: List[Tuple[float, float]] = []
+            points: list[tuple[float, float]] = []
             for i, v in enumerate(values):
                 x = 10 + i * step
                 y = 10 + h * (1.0 - min(1.0, v / vmax))
@@ -130,7 +135,7 @@ class MainWindow(QMainWindow):
 
         # Tabs
         tab_row = QHBoxLayout()
-        self.tab_buttons: List[QPushButton] = []
+        self.tab_buttons: list[QPushButton] = []
         self.tab_ids = ["dashboard", "graph", "diag", "settings", "log"]
         for tab_id in self.tab_ids:
             btn = QPushButton()
@@ -283,11 +288,13 @@ class MainWindow(QMainWindow):
             btn.setChecked(i == index)
             if i == index:
                 btn.setStyleSheet(
-                    "background:#2f86e8; color:#f5f9ff; border:none; border-radius:6px; padding:8px 12px;"
+                    "background:#2f86e8; color:#f5f9ff; border:none; "
+                    "border-radius:6px; padding:8px 12px;"
                 )
             else:
                 btn.setStyleSheet(
-                    "background:transparent; color:#9b9ca4; border:none; border-radius:6px; padding:8px 12px;"
+                    "background:transparent; color:#9b9ca4; border:none; "
+                    "border-radius:6px; padding:8px 12px;"
                 )
         # page buttons only useful on dashboard
         visible = tab_id == "dashboard"
@@ -300,7 +307,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(t["title"])
         self.edition_label.setText(t["edition"])
         self.title_label.setText(t["title"])
-        for btn, tab_id in zip(self.tab_buttons, self.tab_ids):
+        for btn, tab_id in zip(self.tab_buttons, self.tab_ids, strict=True):
             btn.setText(t["tabs"][tab_id])
         self.port_label.setText(t["port"])
         self.connect_btn.setText(t["connect"] if not self.service.connected else t["disconnect"])
@@ -342,7 +349,8 @@ class MainWindow(QMainWindow):
                 background: #313238; border: 1px solid #3d3f46; border-radius: 6px; padding: 6px;
             }
             QPushButton {
-                background: #2f86e8; color: #f5f9ff; border: none; border-radius: 6px; padding: 8px 14px;
+                background: #2f86e8; color: #f5f9ff; border: none;
+                border-radius: 6px; padding: 8px 14px;
             }
             QPushButton:disabled { background: #3d3f46; color: #9b9ca4; }
             QLabel { color: #f3f4f6; }
@@ -442,7 +450,22 @@ class MainWindow(QMainWindow):
             self.dtc_list.addItem(QListWidgetItem(text))
 
     def _clear_dtc(self) -> None:
-        if self.service.clear_dtc():
+        """Clear stored trouble codes — refused by the safety policy in this build.
+
+        The button stays part of the phase 1 layout, but the refusal is reported to the user
+        and the log instead of crashing the window or silently doing nothing.
+        """
+        try:
+            cleared = self.service.clear_dtc()
+        except SafetyGuardError as exc:
+            self._append_log(str(exc))
+            QMessageBox.information(
+                self,
+                COPY[self.lang]["title"],
+                COPY[self.lang]["clear_blocked"],
+            )
+            return
+        if cleared:
             self._refresh_dtc()
 
     def _append_log(self, message: str) -> None:
