@@ -152,6 +152,9 @@ class MainWindow(QMainWindow):
         self.port_label = QLabel()
         self.port_combo = QComboBox()
         self.port_combo.setMinimumWidth(160)
+        self.refresh_ports_btn = QPushButton("🔄")
+        self.refresh_ports_btn.setFixedSize(40, 40)
+        self.refresh_ports_btn.clicked.connect(self._refresh_ports)
         self._reload_ports()
         self.connect_btn = QPushButton()
         self.connect_btn.setMinimumHeight(40)
@@ -168,6 +171,7 @@ class MainWindow(QMainWindow):
 
         tool.addWidget(self.port_label)
         tool.addWidget(self.port_combo)
+        tool.addWidget(self.refresh_ports_btn)
         tool.addWidget(self.connect_btn)
         tool.addStretch()
         tool.addWidget(self.prev_btn)
@@ -374,6 +378,13 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.port_combo.setCurrentIndex(idx)
 
+    def _refresh_ports(self) -> None:
+        """Re-scan serial ports and update the combo box."""
+        prev_count = self.port_combo.count()
+        self._reload_ports()
+        new_count = self.port_combo.count()
+        self._append_log(f"Port scan: {prev_count} -> {new_count} ports")
+
     def _update_status_pill(self) -> None:
         t = COPY[self.lang]
         if self.service.connected:
@@ -397,6 +408,7 @@ class MainWindow(QMainWindow):
             self._zero_gauges()
             self.connect_btn.setText(COPY[self.lang]["connect"])
             self.port_combo.setEnabled(True)
+            self.refresh_ports_btn.setEnabled(True)
             self.mode_combo.setEnabled(True)
             self._update_status_pill()
             return
@@ -414,6 +426,7 @@ class MainWindow(QMainWindow):
 
         self.connect_btn.setText(COPY[self.lang]["disconnect"])
         self.port_combo.setEnabled(False)
+        self.refresh_ports_btn.setEnabled(False)
         self.mode_combo.setEnabled(False)
         self._update_status_pill()
         self._refresh_dtc()
