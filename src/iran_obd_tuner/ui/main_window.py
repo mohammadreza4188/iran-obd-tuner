@@ -1,19 +1,17 @@
-"""Phase 1 main window: dashboard, DTC list, settings and log.
-
-Needs the optional ``[gui]`` extra (PySide6). Read-only: reading live data and stored
-trouble codes is allowed, while clearing codes is refused by the safety policy and reported
-in the UI (see :meth:`MainWindow._clear_dtc`). Constructing the window does not open an
-adapter: it only lists serial ports for the port selector, and connects on user request.
-"""
+"""Phase 1 main window: dashboard, DTC list, settings and log. (Tailwind-inspired UI)"""
 
 from __future__ import annotations
 
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -27,17 +25,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from iran_obd_tuner.diagnostics.recorder import CsvRecorder
 from iran_obd_tuner.core.exceptions import SafetyGuardError
 from iran_obd_tuner.diagnostics.obd_service import LiveSample, ObdService
+from iran_obd_tuner.diagnostics.recorder import CsvRecorder
+from iran_obd_tuner.tuning.ecu_id import MockEcuIdentifier
 from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang
 from iran_obd_tuner.ui.icon import build_icon
+from iran_obd_tuner.ui.safety_modal import SafetyModal
 
 
 class Sparkline(QWidget):
-    """Tiny live chart for RPM / speed history."""
-
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._rpm: deque[float] = deque(maxlen=60)
@@ -57,10 +55,10 @@ class Sparkline(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#26272c"))
+        painter.fillRect(self.rect(), QColor("#0f172a"))
 
         if len(self._rpm) < 2:
-            painter.setPen(QColor("#9b9ca4"))
+            painter.setPen(QColor("#94a3b8"))
             painter.drawText(self.rect(), Qt.AlignCenter, "—")
             return
 
@@ -72,21 +70,16 @@ class Sparkline(QWidget):
             step = w / max(1, len(values) - 1)
             pen = QPen(color, 2)
             painter.setPen(pen)
-            points: list[tuple[float, float]] = []
+            points = []
             for i, v in enumerate(values):
                 x = 10 + i * step
                 y = 10 + h * (1.0 - min(1.0, v / vmax))
                 points.append((x, y))
             for i in range(1, len(points)):
-                painter.drawLine(
-                    int(points[i - 1][0]),
-                    int(points[i - 1][1]),
-                    int(points[i][0]),
-                    int(points[i][1]),
-                )
+                painter.drawLine(int(points[i - 1][0]), int(points[i - 1][1]), int(points[i][0]), int(points[i][1]))
 
-        draw_series(self._rpm, QColor("#2f86e8"), 7000)
-        draw_series(self._speed, QColor("#f3f4f6"), 220)
+        draw_series(self._rpm, QColor("#6366f1"), 7000)
+        draw_series(self._speed, QColor("#f1f5f9"), 220)
 
 
 class MainWindow(QMainWindow):
@@ -98,14 +91,15 @@ class MainWindow(QMainWindow):
         self.recorder = CsvRecorder()
         self._page = 0
 
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1100, 800)
         self.setWindowIcon(build_icon())
         self.status_bar = self.statusBar()
         self.recording_label = QLabel("")
         self.status_bar.addPermanentWidget(self.recording_label)
+        
         self._build_ui()
         self._apply_language()
-        self._apply_dark_theme()
+        self._apply_theme()
 
         self.timer = QTimer(self)
         self.timer.setInterval(250)
@@ -116,90 +110,136 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(12)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.setSpacing(16)
 
-        # Header
+        # --- Header ---
         header = QHBoxLayout()
+        
+        # Icon & Title
         title_box = QVBoxLayout()
         self.edition_label = QLabel()
-        self.edition_label.setStyleSheet("color: #2f86e8; font-weight: 600;")
+        self.edition_label.setStyleSheet("color: #6366f1; font-weight: 600; font-size: 12px;")
         self.title_label = QLabel()
         title_font = QFont()
-        title_font.setPointSize(16)
+        title_font.setPointSize(20)
         title_font.setBold(True)
         self.title_label.setFont(title_font)
         title_box.addWidget(self.edition_label)
         title_box.addWidget(self.title_label)
+        
         header.addLayout(title_box)
         header.addStretch()
+
+        # Version & Badges
+        badge_box = QHBoxLayout()
+        badge_box.setSpacing(8)
+        
+        self.version_label = QLabel("v0.2.0-phase2")
+        self.version_label.setStyleSheet("color: #94a3b8; font-family: monospace; font-size: 12px;")
+        
+        self.guard_badge = QLabel("READ-ONLY GUARD 🛡️")
+        self.guard_badge.setStyleSheet(
+            "color: #10b981; font-weight: bold; font-size: 11px; border: 1px solid #10b981; border-radius: 4px; padding: 2px 8px;"
+        )
+        
         self.status_pill = QLabel()
         self.status_pill.setStyleSheet(
-            "background:#313238; color:#9b9ca4; border-radius:12px; padding:6px 12px;"
+            "background-color: #1e293b; color: #94a3b8; border-radius: 12px; padding: 6px 16px; font-weight: bold; border: 1px solid #334155;"
         )
-        header.addWidget(self.status_pill)
+        
+        badge_box.addWidget(self.version_label)
+        badge_box.addWidget(self.guard_badge)
+        badge_box.addWidget(self.status_pill)
+        header.addLayout(badge_box)
+        
         outer.addLayout(header)
+        outer.addSpacing(8)
 
-        # Tabs
+        # --- Navbar Tabs ---
         tab_row = QHBoxLayout()
+        tab_row.setSpacing(8)
         self.tab_buttons: list[QPushButton] = []
-        self.tab_ids = ["dashboard", "graph", "diag", "settings", "log"]
+        self.tab_ids = ["dashboard", "graph", "diag", "ecu", "bench", "settings", "log"]
+        self.tab_icons = {
+            "dashboard": "📊", "graph": "📈", "diag": "⚠️", 
+            "ecu": "📡", "bench": "🛠️", "settings": "⚙️", "log": "📝"
+        }
+        
         for tab_id in self.tab_ids:
             btn = QPushButton()
             btn.setCheckable(True)
-            btn.setMinimumHeight(36)
+            btn.setMinimumHeight(38)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, t=tab_id: self._switch_tab(t))
             self.tab_buttons.append(btn)
             tab_row.addWidget(btn)
         tab_row.addStretch()
         outer.addLayout(tab_row)
+        
+        # Separator line
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("background-color: #334155;")
+        outer.addWidget(line)
+        outer.addSpacing(8)
 
-        # Toolbar: port + connect
-        tool = QHBoxLayout()
+        # --- Toolbar (Port, Connect, Record) ---
+        tool_frame = QFrame()
+        tool_frame.setObjectName("tool_frame")
+        tool_layout = QHBoxLayout(tool_frame)
+        tool_layout.setContentsMargins(16, 12, 16, 12)
+        
         self.port_label = QLabel()
         self.port_combo = QComboBox()
         self.port_combo.setMinimumWidth(160)
         self.refresh_ports_btn = QPushButton("🔄")
-        self.refresh_ports_btn.setFixedSize(40, 40)
+        self.refresh_ports_btn.setFixedSize(38, 38)
+        self.refresh_ports_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_ports_btn.clicked.connect(self._refresh_ports)
         self._reload_ports()
+        
         self.connect_btn = QPushButton()
-        self.connect_btn.setMinimumHeight(40)
-        self.connect_btn.setMinimumWidth(140)
+        self.connect_btn.setMinimumHeight(38)
+        self.connect_btn.setMinimumWidth(120)
+        self.connect_btn.setCursor(Qt.PointingHandCursor)
         self.connect_btn.clicked.connect(self._toggle_connect)
+        
+        self.record_btn = QPushButton("⏺")
+        self.record_btn.setMinimumHeight(38)
+        self.record_btn.setMinimumWidth(46)
+        self.record_btn.setEnabled(False)
+        self.record_btn.setCursor(Qt.PointingHandCursor)
+        self.record_btn.clicked.connect(self._toggle_recording)
 
         self.prev_btn = QPushButton("<")
         self.next_btn = QPushButton(">")
         self.page_label = QLabel()
-        self.prev_btn.setFixedSize(40, 40)
-        self.next_btn.setFixedSize(40, 40)
+        self.prev_btn.setFixedSize(38, 38)
+        self.next_btn.setFixedSize(38, 38)
         self.prev_btn.clicked.connect(lambda: self._set_page(0))
         self.next_btn.clicked.connect(lambda: self._set_page(1))
 
-        tool.addWidget(self.port_label)
-        tool.addWidget(self.port_combo)
-        tool.addWidget(self.refresh_ports_btn)
-        tool.addWidget(self.connect_btn)
-        self.record_btn = QPushButton("⏺")
-        self.record_btn.setMinimumHeight(40)
-        self.record_btn.setMinimumWidth(50)
-        self.record_btn.setEnabled(False)
-        self.record_btn.clicked.connect(self._toggle_recording)
-        tool.addWidget(self.record_btn)
-        tool.addStretch()
-        tool.addWidget(self.prev_btn)
-        tool.addWidget(self.page_label)
-        tool.addWidget(self.next_btn)
-        outer.addLayout(tool)
+        tool_layout.addWidget(self.port_label)
+        tool_layout.addWidget(self.port_combo)
+        tool_layout.addWidget(self.refresh_ports_btn)
+        tool_layout.addWidget(self.connect_btn)
+        tool_layout.addWidget(self.record_btn)
+        tool_layout.addStretch()
+        tool_layout.addWidget(self.prev_btn)
+        tool_layout.addWidget(self.page_label)
+        tool_layout.addWidget(self.next_btn)
+        
+        outer.addWidget(tool_frame)
 
-        # Pages
+        # --- Pages ---
         self.stack = QStackedWidget()
         outer.addWidget(self.stack, 1)
 
-        # Dashboard gauges
+        # Dashboard
         dash = QWidget()
         self.gauge_grid = QGridLayout(dash)
-        self.gauge_grid.setSpacing(10)
+        self.gauge_grid.setSpacing(16)
         t = COPY[self.lang]
         self.gauges = {
             "rpm": GaugeCard(t["gauges"]["rpm"], t["units"]["rpm"], 7000),
@@ -226,6 +266,7 @@ class MainWindow(QMainWindow):
         diag_layout = QVBoxLayout(diag_page)
         diag_header = QHBoxLayout()
         self.dtc_title = QLabel()
+        self.dtc_title.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.refresh_dtc_btn = QPushButton()
         self.clear_dtc_btn = QPushButton()
         self.refresh_dtc_btn.clicked.connect(self._refresh_dtc)
@@ -238,6 +279,60 @@ class MainWindow(QMainWindow):
         self.dtc_list = QListWidget()
         diag_layout.addWidget(self.dtc_list)
         self.stack.addWidget(diag_page)
+
+        # ECU Identification
+        ecu_page = QWidget()
+        ecu_layout = QVBoxLayout(ecu_page)
+        
+        self.ecu_id_btn = QPushButton()
+        self.ecu_id_btn.setMinimumHeight(40)
+        self.ecu_id_btn.setMaximumWidth(300)
+        self.ecu_id_btn.clicked.connect(self._identify_ecu)
+        
+        self.ecu_result_frame = QFrame()
+        self.ecu_result_frame.setVisible(False)
+        result_layout = QVBoxLayout(self.ecu_result_frame)
+        self.ecu_result_label = QLabel("")
+        self.ecu_result_label.setStyleSheet("font-size: 14px; line-height: 1.8;")
+        self.ecu_result_label.setWordWrap(True)
+        result_layout.addWidget(self.ecu_result_label)
+
+        ecu_layout.addWidget(self.ecu_id_btn, alignment=Qt.AlignCenter)
+        ecu_layout.addSpacing(20)
+        ecu_layout.addWidget(self.ecu_result_frame)
+        ecu_layout.addStretch()
+        self.stack.addWidget(ecu_page)
+
+        # Bench
+        bench_page = QWidget()
+        bench_layout = QVBoxLayout(bench_page)
+        
+        self.bench_title = QLabel()
+        self.bench_title.setStyleSheet("color: #ef4444; font-size: 20px; font-weight: bold;")
+        self.bench_title.setAlignment(Qt.AlignCenter)
+        
+        self.bench_warning = QLabel()
+        self.bench_warning.setWordWrap(True)
+        self.bench_warning.setAlignment(Qt.AlignCenter)
+        self.bench_warning.setStyleSheet(
+            "background-color: #1e293b; color: #94a3b8; padding: 16px; border-radius: 8px; border: 1px solid #334155; margin-top: 10px; margin-bottom: 20px;"
+        )
+        
+        btn_layout = QVBoxLayout()
+        self.bench_btn_read = QPushButton()
+        self.bench_btn_write = QPushButton()
+        self.bench_btn_unlock = QPushButton()
+        
+        for btn in (self.bench_btn_read, self.bench_btn_write, self.bench_btn_unlock):
+            btn.setEnabled(False)
+            btn.setMinimumHeight(40)
+            btn_layout.addWidget(btn)
+
+        bench_layout.addWidget(self.bench_title)
+        bench_layout.addWidget(self.bench_warning)
+        bench_layout.addLayout(btn_layout)
+        bench_layout.addStretch()
+        self.stack.addWidget(bench_page)
 
         # Settings
         settings_page = QWidget()
@@ -265,7 +360,7 @@ class MainWindow(QMainWindow):
 
         self.sim_note = QLabel()
         self.sim_note.setWordWrap(True)
-        self.sim_note.setStyleSheet("color:#9b9ca4;")
+        self.sim_note.setStyleSheet("color:#94a3b8;")
         settings_layout.addWidget(self.sim_note)
         settings_layout.addStretch()
         self.stack.addWidget(settings_page)
@@ -288,6 +383,7 @@ class MainWindow(QMainWindow):
         page0 = ["rpm", "speed", "coolant", "voltage", "fuel"]
         page1 = ["throttle", "iat", "load"]
         keys = page0 if self._page == 0 else page1
+        
         for i, key in enumerate(keys):
             self.gauge_grid.addWidget(self.gauges[key], i // 3, i % 3)
 
@@ -305,15 +401,13 @@ class MainWindow(QMainWindow):
             btn.setChecked(i == index)
             if i == index:
                 btn.setStyleSheet(
-                    "background:#2f86e8; color:#f5f9ff; border:none; "
-                    "border-radius:6px; padding:8px 12px;"
+                    "background-color: #6366f1; color: #ffffff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: bold;"
                 )
             else:
                 btn.setStyleSheet(
-                    "background:transparent; color:#9b9ca4; border:none; "
-                    "border-radius:6px; padding:8px 12px;"
+                    "background-color: transparent; color: #94a3b8; border: none; border-radius: 8px; padding: 8px 16px;"
                 )
-        # page buttons only useful on dashboard
+        
         visible = tab_id == "dashboard"
         self.prev_btn.setVisible(visible)
         self.next_btn.setVisible(visible)
@@ -324,8 +418,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(t["title"])
         self.edition_label.setText(t["edition"])
         self.title_label.setText(t["title"])
-        for btn, tab_id in zip(self.tab_buttons, self.tab_ids, strict=True):
-            btn.setText(t["tabs"][tab_id])
+        for btn, tab_id in zip(self.tab_buttons, self.tab_ids):
+            icon = self.tab_icons.get(tab_id, "")
+            btn.setText(f"{icon}  {t['tabs'][tab_id]}")
+            
         self.port_label.setText(t["port"])
         self.connect_btn.setText(t["connect"] if not self.service.connected else t["disconnect"])
         self.dtc_title.setText(t["dtc_title"])
@@ -336,9 +432,16 @@ class MainWindow(QMainWindow):
         self.mode_combo.setItemText(0, t["mode_sim"])
         self.mode_combo.setItemText(1, t["mode_real"])
         self.sim_note.setText(t["sim_note"])
+        
+        self.ecu_id_btn.setText(t["ecu_id_btn"])
+        self.bench_title.setText(t["bench_title"])
+        self.bench_warning.setText(t["bench_warning"])
+        self.bench_btn_read.setText(t["bench_btn_read"])
+        self.bench_btn_write.setText(t["bench_btn_write"])
+        self.bench_btn_unlock.setText(t["bench_btn_unlock"])
+        
         self._update_status_pill()
 
-        # gauge labels
         mapping = {
             "rpm": (t["gauges"]["rpm"], t["units"]["rpm"]),
             "speed": (t["gauges"]["speed"], t["units"]["kmh"]),
@@ -353,35 +456,38 @@ class MainWindow(QMainWindow):
             self.gauges[key].set_label(label)
             self.gauges[key].gauge.set_unit(unit)
 
-        # RTL for Persian
         direction = Qt.RightToLeft if self.lang == "fa" else Qt.LeftToRight
         self.setLayoutDirection(direction)
         self._layout_gauges()
 
-    def _apply_dark_theme(self) -> None:
+    def _apply_theme(self) -> None:
+        font_id = QFontDatabase.addApplicationFont("Vazirmatn-Regular.ttf")
+        font_family = "Vazirmatn" if font_id != -1 else "Segoe UI"
+        
         self.setStyleSheet(
-            """
-            QMainWindow, QWidget { background: #1a1b1f; color: #f3f4f6; }
-
-            QComboBox, QListWidget {
-                background: #313238; border: 1px solid #3d3f46; border-radius: 6px;
-                padding: 6px; selection-background-color: #2f86e8;
-            }
-            QComboBox:hover, QListWidget:hover { border: 1px solid #4d5058; }
-            QComboBox:focus { border: 1px solid #2f86e8; }
-
-            QPushButton {
-                background: #2f86e8; color: #f5f9ff;
-                border: none; border-radius: 6px; padding: 8px 14px;
-            }
-            QPushButton:hover { background: #4a97ec; }
-            QPushButton:pressed { background: #2570c4; }
-            QPushButton:disabled { background: #3d3f46; color: #6b6d75; }
-
-            QLabel { color: #f3f4f6; }
-
-            QStatusBar { background: #26272c; color: #9b9ca4; }
-            QStatusBar::item { border: none; }
+            f"""
+            * {{ font-family: '{font_family}', 'Tahoma', sans-serif; }}
+            QMainWindow, QWidget {{ background-color: #0f172a; color: #f1f5f9; }}
+            QFrame#tool_frame {{
+                background-color: #1e293b; border: 1px solid #334155; border-radius: 12px;
+            }}
+            QComboBox, QListWidget, QLineEdit {{
+                background-color: #1e293b; border: 1px solid #334155; border-radius: 8px;
+                padding: 6px 12px; color: #f1f5f9; selection-background-color: #6366f1;
+            }}
+            QComboBox:hover, QListWidget:hover {{ border: 1px solid #475569; }}
+            QComboBox:focus {{ border: 1px solid #6366f1; }}
+            QComboBox::drop-down {{ border: none; width: 20px; }}
+            QPushButton {{
+                background-color: #6366f1; color: #ffffff; border: none;
+                border-radius: 8px; padding: 8px 16px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #4f46e5; }}
+            QPushButton:pressed {{ background-color: #4338ca; }}
+            QPushButton:disabled {{ background-color: #334155; color: #64748b; }}
+            QLabel {{ color: #f1f5f9; }}
+            QStatusBar {{ background-color: #1e293b; color: #94a3b8; border-top: 1px solid #334155; padding: 4px; }}
+            QStatusBar::item {{ border: none; }}
             """
         )
 
@@ -398,13 +504,11 @@ class MainWindow(QMainWindow):
         for port in self.service.list_ports():
             label = COPY[self.lang]["auto"] if port == "Auto" else port
             self.port_combo.addItem(label, port)
-        # restore
         idx = self.port_combo.findData(current if current != COPY[self.lang]["auto"] else "Auto")
         if idx >= 0:
             self.port_combo.setCurrentIndex(idx)
 
     def _refresh_ports(self) -> None:
-        """Re-scan serial ports and update the combo box."""
         prev_count = self.port_combo.count()
         self._reload_ports()
         new_count = self.port_combo.count()
@@ -415,12 +519,12 @@ class MainWindow(QMainWindow):
         if self.service.connected:
             text = t["sim"] if self.service.simulation else t["connected"]
             self.status_pill.setStyleSheet(
-                "background:#2f86e8; color:#f5f9ff; border-radius:12px; padding:6px 12px;"
+                "background:#6366f1; color:#ffffff; border-radius:12px; padding:6px 16px; font-weight:bold;"
             )
         else:
             text = t["idle"]
             self.status_pill.setStyleSheet(
-                "background:#313238; color:#9b9ca4; border-radius:12px; padding:6px 12px;"
+                "background:#1e293b; color:#94a3b8; border-radius:12px; padding:6px 16px; font-weight:bold; border:1px solid #334155;"
             )
         self.status_pill.setText(text)
 
@@ -445,11 +549,7 @@ class MainWindow(QMainWindow):
         simulation = self.mode_combo.currentData() == "sim"
         ok = self.service.connect(port=str(port), simulation=simulation)
         if not ok:
-            QMessageBox.warning(
-                self,
-                COPY[self.lang]["title"],
-                COPY[self.lang]["connection_failed"],
-            )
+            QMessageBox.warning(self, COPY[self.lang]["title"], COPY[self.lang]["connection_failed"])
             return
 
         self.connect_btn.setText(COPY[self.lang]["disconnect"])
@@ -496,8 +596,18 @@ class MainWindow(QMainWindow):
             text = f"{item.code}  —  {item.description}"
             self.dtc_list.addItem(QListWidgetItem(text))
 
+    def _clear_dtc(self) -> None:
+        try:
+            cleared = self.service.clear_dtc()
+        except SafetyGuardError:
+            self._append_log("msg.safety_violation")
+            modal = SafetyModal(self.lang, self)
+            modal.exec()
+            return
+        if cleared:
+            self._refresh_dtc()
+
     def _toggle_recording(self) -> None:
-        """Start or stop recording live samples to CSV."""
         if self.recorder.recording:
             path = self.recorder.stop()
             count = self.recorder.count
@@ -505,34 +615,38 @@ class MainWindow(QMainWindow):
             self.record_btn.setStyleSheet("")
             self._append_log("msg.recording_stopped", count, str(path))
         else:
-            path = self.recorder.start()
+            default_name = f"live_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            file_path_str, _ = QFileDialog.getSaveFileName(
+                self, "Save Live Data / ذخیره داده‌ها", default_name, "CSV Files (*.csv)"
+            )
+            if not file_path_str:
+                return
+                
+            custom_path = Path(file_path_str)
+            path = self.recorder.start(custom_path)
+            
             self.record_btn.setText("⏹")
             self.record_btn.setStyleSheet(
-                "background:#c0392b; color:#f5f9ff; border:none; border-radius:6px;"
+                "background-color: #ef4444; color: #ffffff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: bold;"
             )
             self._append_log("msg.recording_started", str(path))
 
-    def _clear_dtc(self) -> None:
-        """Clear stored trouble codes — refused by the safety policy in this build.
-
-        The button stays part of the phase 1 layout, but the refusal is reported to the user
-        and the log instead of crashing the window or silently doing nothing.
-        """
-        try:
-            cleared = self.service.clear_dtc()
-        except SafetyGuardError as exc:
-            self._append_log(str(exc))
-            QMessageBox.information(
-                self,
-                COPY[self.lang]["title"],
-                COPY[self.lang]["clear_blocked"],
-            )
-            return
-        if cleared:
-            self._refresh_dtc()
+    def _identify_ecu(self) -> None:
+        identifier = MockEcuIdentifier()
+        result = identifier.identify()
+        self._append_log("msg.ecu_identified", result.ecu_family)
+        
+        t = COPY[self.lang]
+        html = (
+            f"<b>{t['ecu_id_vin']}</b> <code style='color: #38bdf8;'>{result.vin}</code><br><br>"
+            f"<b>{t['ecu_id_family']}</b> <code style='color: #f59e0b;'>{result.ecu_family}</code><br><br>"
+            f"<b>{t['ecu_id_status']}</b> {result.status}<br><br>"
+            f"<span style='color: #ef4444;'>{t['ecu_id_simulated']}</span>"
+        )
+        self.ecu_result_label.setText(html)
+        self.ecu_result_frame.setVisible(True)
 
     def _translate_log(self, message: str, args: tuple) -> str:
-        """Translate a log message: if it's a known i18n key, translate it; else pass through."""
         t = COPY[self.lang]
         messages = t.get("messages", {})
         if message in messages:
@@ -549,8 +663,6 @@ class MainWindow(QMainWindow):
         return message
 
     def _append_log(self, message: str, *args: object) -> None:
-        from datetime import datetime
-
         text = self._translate_log(message, args)
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log_list.insertItem(0, f"{stamp}  {text}")

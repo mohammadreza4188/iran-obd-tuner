@@ -40,11 +40,11 @@ class GaugeWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        bg = QColor("#26272c")
-        line = QColor("#3d3f46")
-        accent = QColor("#2f86e8")
-        ink = QColor("#f3f4f6")
-        mute = QColor("#9b9ca4")
+        bg = QColor("#1e293b")
+        line = QColor("#334155")
+        accent = QColor("#6366f1")
+        ink = QColor("#f1f5f9")
+        mute = QColor("#94a3b8")
 
         painter.fillRect(self.rect(), bg)
 
@@ -101,8 +101,15 @@ class GaugeWidget(QWidget):
 class GaugeCard(QWidget):
     def __init__(self, label: str, unit: str, maximum: float, digits: int = 0, parent=None) -> None:
         super().__init__(parent)
+        self.setStyleSheet("""
+            GaugeCard {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 12px;
+            }
+        """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(16, 16, 16, 16)  # Padding inside the card
         self.gauge = GaugeWidget(label=label, unit=unit, maximum=maximum, digits=digits)
         layout.addWidget(self.gauge)
 

@@ -43,11 +43,17 @@ class CsvRecorder:
     def count(self) -> int:
         return self._count
 
-    def start(self) -> Path:
-        """Open a new CSV file and write the header."""
-        self._log_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._path = self._log_dir / f"live_{stamp}.csv"
+    def start(self, custom_path: Path | None = None) -> Path:
+        """Open a new CSV file and write the header. Accepts a custom path."""
+        if custom_path:
+            self._path = custom_path
+            if custom_path.parent:
+                custom_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._path = self._log_dir / f"live_{stamp}.csv"
+            
         self._file = open(self._path, "w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._file, fieldnames=self.FIELDS)
         self._writer.writeheader()
