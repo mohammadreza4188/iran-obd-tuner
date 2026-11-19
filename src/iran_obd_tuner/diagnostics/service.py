@@ -17,9 +17,37 @@ from iran_obd_tuner.core.models import VehicleInfo
 from iran_obd_tuner.core.pids import DEFAULT_LIVE_DATA_PIDS, normalize_pid
 from iran_obd_tuner.database.repository import DtcDefinition, KnowledgeRepository
 from iran_obd_tuner.diagnostics.models import DiagnosticReport, TroubleCode
-from iran_obd_tuner.hardware.base import AdapterKind, ObdAdapter
+from iran_obd_tuner.hardware.base import AdapterInfo, ObdAdapter
 
-__all__ = ["DiagnosticService"]
+__all__ = ["DiagnosticService", "interpret_trouble_code", "vehicle_info_for"]
+
+
+def interpret_trouble_code(code: str, knowledge: KnowledgeRepository | None) -> TroubleCode:
+    """Interpret one raw trouble code string with an optional knowledge repository.
+
+    Shared by the one-shot report workflow and the dashboard's live session so a code is
+    always described the same way.
+
+    Raises:
+        ValueError: If ``code`` is not a well-formed trouble code.
+    """
+    definition: DtcDefinition | None = None
+    if knowledge is not None:
+        definition = knowledge.describe_dtc(code)
+    return TroubleCode.from_code(code, definition)
+
+
+def vehicle_info_for(adapter_info: AdapterInfo, vin: str | None) -> VehicleInfo:
+    """Build the vehicle identification from what an adapter reported.
+
+    ``simulated`` comes from the adapter's explicit declaration, never from its kind.
+    """
+    return VehicleInfo(
+        vin=vin,
+        protocol=adapter_info.protocols[0] if adapter_info.protocols else None,
+        adapter_name=adapter_info.name,
+        simulated=adapter_info.simulated,
+    )
 
 
 class DiagnosticService:
@@ -74,10 +102,7 @@ class DiagnosticService:
         Raises:
             ValueError: If ``code`` is not a well-formed trouble code.
         """
-        definition: DtcDefinition | None = None
-        if self._knowledge is not None:
-            definition = self._knowledge.describe_dtc(code)
-        return TroubleCode.from_code(code, definition)
+        return interpret_trouble_code(code, self._knowledge)
 
     def collect_report(
         self,
@@ -120,12 +145,7 @@ class DiagnosticService:
         trouble_codes = tuple(self.describe_trouble_code(code) for code in raw_codes)
         adapter_info = self._adapter.info
         report = DiagnosticReport(
-            vehicle=VehicleInfo(
-                vin=vin,
-                protocol=adapter_info.protocols[0] if adapter_info.protocols else None,
-                adapter_name=adapter_info.name,
-                simulated=adapter_info.kind is AdapterKind.MOCK,
-            ),
+            vehicle=vehicle_info_for(adapter_info, vin),
             adapter=adapter_info,
             measurements=batch.measurements,
             supported_pids=supported,

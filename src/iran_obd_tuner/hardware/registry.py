@@ -18,9 +18,18 @@ from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
 from iran_obd_tuner.hardware.base import AdapterInfo, AdapterKind, ObdAdapter
 from iran_obd_tuner.hardware.mock import MockObdAdapter, MockScenario
 
-__all__ = ["MOCK_ADAPTER_NAME", "create_adapter", "declared_adapters", "implemented_adapters"]
+__all__ = [
+    "ELM327_ADAPTER_NAME",
+    "MOCK_ADAPTER_NAME",
+    "create_adapter",
+    "declared_adapters",
+    "implemented_adapters",
+]
 
 MOCK_ADAPTER_NAME = "mock"
+
+#: Registry name of the (planned) ELM327 serial/USB adapter.
+ELM327_ADAPTER_NAME = "elm327"
 
 _DECLARED: tuple[AdapterInfo, ...] = (
     AdapterInfo(
@@ -31,9 +40,10 @@ _DECLARED: tuple[AdapterInfo, ...] = (
         protocols=("ISO 15765-4 CAN (11-bit ID, 500 kbit/s) [simulated]",),
         hardware_required=False,
         notes="Implemented. Values are simulated and must never be presented as vehicle data.",
+        simulated=True,
     ),
     AdapterInfo(
-        name="elm327",
+        name=ELM327_ADAPTER_NAME,
         kind=AdapterKind.SERIAL,
         description="ELM327 compatible serial/USB adapter over pyserial (planned, phase 1).",
         implemented=False,

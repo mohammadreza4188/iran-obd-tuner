@@ -3,16 +3,17 @@
 The package is organised in layers that only depend downwards:
 
     app/         entry points and wiring          (imports everything below)
-    diagnostics/ read-only diagnostic workflow    (core + hardware + database)
+    ui/          PySide6 dashboard                (core + diagnostics; optional [gui])
+    diagnostics/ read-only workflow + live data   (core + hardware + database)
     tuning/      bench/calibration interfaces     (core, interfaces only)
     hardware/    adapter interfaces + mock        (core)
     database/    knowledge database               (core)
     core/        config, logging, models, safety  (standard library only)
-    ui/          desktop user interface           (not implemented yet)
 
 Nothing in this package talks to a real vehicle: the only adapter shipped today is an
 in-memory simulator, and every operation that could change vehicle state is denied by
-:mod:`iran_obd_tuner.core.safety`. See docs/architecture.md for the full picture.
+:mod:`iran_obd_tuner.core.safety` (no implementation for any of them exists). See
+docs/architecture.md for the full picture.
 """
 
 from __future__ import annotations

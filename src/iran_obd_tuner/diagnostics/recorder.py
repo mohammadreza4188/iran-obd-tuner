@@ -1,92 +1,108 @@
-"""CSV recorder for live OBD samples."""
+"""CSV recorder for live data snapshots.
+
+One row per :class:`~iran_obd_tuner.diagnostics.live_data.LiveSnapshot`:
+
+* ``timestamp_utc`` — ISO 8601 with milliseconds and an explicit ``+00:00`` offset;
+* ``simulated`` — ``true`` or ``false``, so a simulated recording can never be mistaken for a
+  vehicle capture once the file leaves the application;
+* one column per parameter, named ``<PID> <name> [<unit>]`` from the PID catalogue.
+
+A parameter that was not read successfully leaves its cell **empty**: no fallback value is
+ever written. Not implemented: per-cell status columns, file rotation, compression.
+"""
 
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, TextIO
 
-from iran_obd_tuner.diagnostics.obd_service import LiveSample
+from iran_obd_tuner.core.pids import describe_pid, normalize_pid
+from iran_obd_tuner.diagnostics.live_data import LiveSnapshot
+
+__all__ = ["CsvRecorder", "column_name"]
+
+
+def column_name(pid: str) -> str:
+    """Return the CSV column header for ``pid``, e.g. ``"010C Engine speed [rpm]"``."""
+    normalized = normalize_pid(pid)
+    spec = describe_pid(normalized)
+    if spec is None:
+        return normalized
+    return f"{normalized} {spec.name} [{spec.unit}]"
 
 
 class CsvRecorder:
-    """Write live OBD samples to a CSV file."""
+    """Write live data snapshots to a CSV file."""
 
-    FIELDS = [
-        "timestamp",
-        "rpm",
-        "speed",
-        "coolant",
-        "voltage",
-        "fuel",
-        "throttle",
-        "iat",
-        "load",
-    ]
-
-    def __init__(self, log_dir: Path = Path("logs")) -> None:
-        self._log_dir = log_dir
-        self._file = None
-        self._writer = None
+    def __init__(self) -> None:
+        self._file: TextIO | None = None
+        self._writer: Any = None  # csv writer objects have no public class
         self._path: Path | None = None
+        self._pids: tuple[str, ...] = ()
         self._count = 0
 
     @property
     def recording(self) -> bool:
+        """Whether a file is currently open."""
         return self._file is not None
 
     @property
     def path(self) -> Path | None:
+        """File being written, or ``None`` when not recording."""
         return self._path
 
     @property
     def count(self) -> int:
+        """Rows written since the last :meth:`start`."""
         return self._count
 
-    def start(self, custom_path: Path | None = None) -> Path:
-        """Open a new CSV file and write the header. Accepts a custom path."""
-        if custom_path:
-            self._path = custom_path
-            if custom_path.parent:
-                custom_path.parent.mkdir(parents=True, exist_ok=True)
-        else:
-            self._log_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._path = self._log_dir / f"live_{stamp}.csv"
-            
-        self._file = open(self._path, "w", newline="", encoding="utf-8")
-        self._writer = csv.DictWriter(self._file, fieldnames=self.FIELDS)
-        self._writer.writeheader()
-        self._count = 0
-        return self._path
+    def start(self, path: Path, pids: Sequence[str]) -> Path:
+        """Create ``path`` (and its parent directories) and write the header row.
 
-    def write(self, sample: LiveSample) -> None:
-        """Append one sample row."""
+        Raises:
+            RuntimeError: If a recording is already running.
+            ValueError: If ``pids`` is empty.
+            OSError: If the file cannot be created.
+        """
+        if self._file is not None:
+            raise RuntimeError(f"already recording to {self._path}")
+        if not pids:
+            raise ValueError("at least one parameter is required")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._pids = tuple(normalize_pid(pid) for pid in pids)
+        self._file = path.open("w", newline="", encoding="utf-8")
+        self._writer = csv.writer(self._file)
+        self._writer.writerow(
+            ["timestamp_utc", "simulated", *(column_name(pid) for pid in self._pids)]
+        )
+        self._path = path
+        self._count = 0
+        return path
+
+    def write(self, snapshot: LiveSnapshot) -> None:
+        """Append one row. Ignored when not recording."""
         if self._writer is None:
             return
+        cells: list[str] = []
+        for pid in self._pids:
+            value = snapshot.value_for(pid)
+            cells.append("" if value is None else f"{value:.3f}")
         self._writer.writerow(
-            {
-                "timestamp": datetime.now().isoformat(timespec="milliseconds"),
-                "rpm": round(sample.rpm, 1),
-                "speed": round(sample.speed, 1),
-                "coolant": round(sample.coolant, 1),
-                "voltage": round(sample.voltage, 2),
-                "fuel": round(sample.fuel, 1),
-                "throttle": round(sample.throttle, 1),
-                "iat": round(sample.iat, 1),
-                "load": round(sample.load, 1),
-            }
+            [
+                snapshot.timestamp.isoformat(timespec="milliseconds"),
+                "true" if snapshot.simulated else "false",
+                *cells,
+            ]
         )
         self._count += 1
 
     def stop(self) -> Path | None:
-        """Close the file and return its path."""
-        if self._file is not None:
-            try:
-                self._file.close()
-            except Exception:
-                pass
+        """Close the file and return its path (``None`` when nothing was recording)."""
         path = self._path
+        if self._file is not None:
+            self._file.close()
         self._file = None
         self._writer = None
         self._path = None

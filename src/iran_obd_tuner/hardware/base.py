@@ -58,6 +58,9 @@ class AdapterInfo:
             Empty means "unknown", never "all".
         hardware_required: Whether an external device is needed.
         notes: Caveats, e.g. required dependency or planned phase.
+        simulated: ``True`` when every value this adapter returns is simulated rather than
+            read from a vehicle. Consumers (reports, CSV recordings, the dashboard) use this
+            flag to label simulated data; it is never inferred from the adapter kind.
     """
 
     name: str
@@ -67,6 +70,7 @@ class AdapterInfo:
     protocols: tuple[str, ...] = ()
     hardware_required: bool = False
     notes: str = ""
+    simulated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

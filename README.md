@@ -5,7 +5,7 @@
 > **English summary.** A Python toolkit for OBD-II diagnostics and (in later phases) bench
 > ECU calibration for the Iranian market. Today it ships a working, hardware-independent,
 > strictly **read-only** diagnostic workflow driven by an in-memory simulated adapter, a
-> PySide6 dashboard (phase 1) on top of the same simulated data, and the project scaffolding
+> PySide6 dashboard (phase 1) that uses the very same adapter contract, and the project scaffolding
 > (packaging, config, logging, tests, CI, docs) the team needs to grow it. No ECU write/flash
 > functionality exists — clearing trouble codes from the dashboard is refused by the safety
 > policy — and none is planned before explicit approval and vehicle-specific validation.
@@ -41,22 +41,27 @@
 | مدل‌های داده (Measurement/Unit/VehicleInfo) و کاتالوگ PID | `core/models.py`, `core/pids.py` |
 | ساختار کد خطا (SAE J2012) و مرز ایمنی | `core/dtc.py`, `core/safety.py` |
 | جریان کامل تشخیص (شناسایی، Live Data، DTC، گزارش JSON) | `src/iran_obd_tuner/diagnostics/service.py` |
-| سرویس اتصال داشبورد (python-OBD اختیاری + حالت شبیه‌سازی) | `src/iran_obd_tuner/diagnostics/obd_service.py` |
-| آداپتور شبیه‌ساز + تزریق خطای ارتباطی | `src/iran_obd_tuner/hardware/mock.py` |
+| نشست داده زنده داشبورد روی همان قرارداد `ObdAdapter`: وضعیت جداگانه هر PID (پشتیبانی‌نشده / بدون پاسخ / پاسخ نامعتبر)، بدون هیچ مقدار جایگزین | `src/iran_obd_tuner/diagnostics/live_data.py` |
+| آداپتور شبیه‌ساز (ایستا + چرخه رانندگی زمان‌مند و قطعی) + تزریق خطای ارتباطی | `src/iran_obd_tuner/hardware/mock.py` |
+| فهرست درگاه‌های سریال بدون باز کردن هیچ درگاهی (pyserial اختیاری) | `src/iran_obd_tuner/hardware/serial_ports.py` |
 | دیتابیس دانش JSON (زیرمجموعه عمومی کدهای خطا) | `src/iran_obd_tuner/database/` |
-| داشبورد گرافیکی PySide6: گیج‌ها، نمودار زنده، کدهای خطا، لاگ، دو زبان (فارسی/انگلیسی) | `src/iran_obd_tuner/ui/` + `app/gui_main.py` |
+| سیم‌کشی داشبورد در لایه app (تنظیمات، لاگ، رجیستری آداپتور) | `src/iran_obd_tuner/app/dashboard.py` + `app/gui_main.py` |
+| داشبورد گرافیکی PySide6: گیج‌ها، نمودار زنده، کدهای خطا، شناسایی خودرو، لاگ، دو زبان (فارسی/انگلیسی) | `src/iran_obd_tuner/ui/` |
 | دکمه بازخوانی درگاه‌های سریال در نوار ابزار | `src/iran_obd_tuner/ui/main_window.py` |
-| ضبط Live Data در فایل CSV با timestamp میلی‌ثانیه | `src/iran_obd_tuner/diagnostics/recorder.py` |
+| ضبط Live Data در CSV: زمان UTC، واحد هر ستون و ستون `simulated` | `src/iran_obd_tuner/diagnostics/recorder.py` |
 | نوار وضعیت (Status Bar) با پیام‌های لحظه‌ای و شمارنده نمونه‌ها | `src/iran_obd_tuner/ui/main_window.py` |
-| ترجمه کامل پیام‌های لاگ و خطا (فارسی/انگلیسی) با کلیدهای i18n | `src/iran_obd_tuner/ui/i18n.py` |
+| ترجمه کامل رابط کاربری و پیام‌های لاگ (فارسی/انگلیسی) با کلیدهای i18n | `src/iran_obd_tuner/ui/i18n.py` |
 | آیکون برنامه (تولید برنامه‌نویسی‌شده با QPainter، بدون فایل خارجی) | `src/iran_obd_tuner/ui/icon.py` |
-| مجموعه تست خودکار، بدون نیاز به سخت‌افزار و بدون نمایشگر | `tests/` |
+| مجموعه تست خودکار بدون سخت‌افزار و بدون نمایشگر، شامل تست مرز لایه‌ها و کامل بودن ترجمه | `tests/` |
 
 ### شبیه‌سازی‌شده (هیچ داده واقعی خودرویی در آن نیست)
 
 - **تمام** مقادیر Live Data و کدهای خطای خروجی، شبیه‌سازی‌شده‌اند (`adapter = "mock"` برای CLI و
   «حالت شبیه‌سازی» برای داشبورد).
 - گزارش‌ها فیلد `simulated: true` را حمل می‌کنند و در خروجی متنی صریحاً `SIMULATED` چاپ می‌شود.
+- در داشبورد، تا وقتی نشست شبیه‌سازی باز است یک نوار هشدار دائمی دیده می‌شود. فایل‌های CSV
+  ستون `simulated` دارند و نام پیشنهادی‌شان به `_simulated.csv` ختم می‌شود. VIN شبیه‌سازی
+  (`SIMULATEDVIN00001`) با برچسب «داده شبیه‌سازی‌شده» نمایش داده می‌شود.
 - توضیحات کدهای خطا از یک زیرمجموعه دستی‌نویس غیرمرجع (generic) می‌آید که متادیتای آن
   `authoritative: false` است.
 
@@ -64,8 +69,7 @@
 
 | قابلیت | فاز | پیش‌نیاز |
 |---|---|---|
-| آداپتور واقعی ELM327 (سریال/USB) | ۱ | `[obd]` (python-OBD، pyserial) + آداپتور فیزیکی |
-| یکسان‌سازی `ObdService` با `ObdAdapter` و حذف داده تکراری UI | ۱ | تصمیم تیم (بخش «بدهی فنی» در `docs/architecture.md`) |
+| آداپتور واقعی ELM327 (سریال/USB) + خواندن در پس‌زمینه (worker) | ۱ (Milestone 2) | `[obd]` + آداپتور فیزیکی برای اعتبارسنجی |
 | CAN و UDS (SocketCAN/PCAN/Kvaser) | ۲ | `[can]`، `[bench]` + سخت‌افزار |
 | مطالعه و تکمیل دیتابیس دانش خودروهای ایرانی | ۳ | پژوهش مستند، نه حدس |
 | خواندن/ویرایش ROM در حالت Bench و تصحیح چک‌سام | ۴ | تأیید صریح + اعتبارسنجی خودرویی |
@@ -83,13 +87,17 @@ declared adapters: 3 (1 implemented)
 
 داشبورد می‌تواند داده‌های Live را در فایل CSV ذخیره کند تا بعداً در Excel/پایتون تحلیل شوند:
 
-1. در تب **تنظیمات**، حالت **شبیه‌سازی** (یا آداپتور واقعی) را انتخاب کنید.
-2. در تب **داشبورد**، دکمه **اتصال** را بزنید.
-3. دکمه **⏺ (ضبط)** در نوار ابزار فعال می‌شود؛ روی آن بزنید تا ضبط شروع شود.
+1. در تب **تنظیمات**، حالت **شبیه‌سازی** را انتخاب کنید (آداپتور واقعی تا Milestone 2 پیاده نشده است).
+2. دکمه **اتصال** را بزنید.
+3. دکمه **⏺ (ضبط)** در نوار ابزار فعال می‌شود. با زدن آن پنجره ذخیره باز می‌شود و مسیر
+   پیشنهادی در پوشه `output_dir` تنظیمات است (پیش‌فرض: `output/`).
 4. هرچه نمونه‌ها ذخیره می‌شوند، در **نوار وضعیت** شمارنده به‌روز می‌شود (`⏺ ۱۵۰ نمونه`).
-5. برای توقف، روی **⏹** بزنید.
+5. برای توقف، روی **⏹** بزنید. با قطع اتصال یا بستن پنجره هم ضبط متوقف و فایل بسته می‌شود.
 
-فایل‌ها در پوشه `logs/` ذخیره می‌شوند (این پوشه در `.gitignore` است و در مخزن commit نمی‌شود):
+ساختار فایل: ستون `timestamp_utc` (ISO 8601 با میلی‌ثانیه و `+00:00`)، ستون `simulated`
+(`true`/`false`) و برای هر پارامتر یک ستون با نام `<PID> <نام> [<واحد>]`، مثل
+`010C Engine speed [rpm]`. اگر پارامتری خوانده نشود، خانه آن **خالی** می‌ماند و هیچ عدد
+جایگزینی نوشته نمی‌شود. پوشه `output/` در `.gitignore` است و commit نمی‌شود.
 
 ## مرز ایمنی (مهم)
 
@@ -97,14 +105,17 @@ declared adapters: 3 (1 implemented)
 - پاک کردن کدهای خطا (سرویس ۰۴)، تست عملگرها، فلش و نوشتن کالیبراسیون **پیاده‌سازی نشده‌اند**.
   فراخوانی آن‌ها با `SafetyGuardError` رد می‌شود؛ حتی اگر سیاست ایمنی به‌صورت کدی اجازه بدهد،
   با `UnsupportedOperationError` مشخص می‌شود که پیاده‌سازی وجود ندارد.
-- در داشبورد، دکمه «پاک کردن کدها» عمداً در چیدمان باقی مانده است، اما **کار نمی‌کند**: فراخوانی
-  از گارد ایمنی عبور می‌کند و کاربر پیام «غیرفعال در این نسخه» را می‌بیند و در لاگ ثبت می‌شود
-  (کدهای خطا پاک نمی‌شوند). مسیر واقعی python-OBD برای این کار زیر سیاست پیش‌فرض
-  **غیرقابل‌دسترس** است و فعال‌کردن آن نیازمند تأیید تیم است.
+- در داشبورد، دکمه «پاک کردن کدها» در چیدمان باقی مانده، اما **کار نمی‌کند**. درخواست به گارد
+  ایمنی آداپتور (`ObdAdapter.clear_diagnostic_trouble_codes`) می‌رود و رد می‌شود. کاربر یک
+  پنجره توضیح می‌بیند و رویداد در لاگ ثبت می‌شود. **هیچ پیاده‌سازی‌ای برای پاک کردن کدها
+  (سرویس ۰۴) در کد وجود ندارد.** مسیر قبلی python-OBD در Milestone 1 حذف شد و
+  `tests/unit/test_architecture.py` از بازگشت آن جلوگیری می‌کند.
 - سیاست ایمنی **از فایل تنظیمات خوانده نمی‌شود**؛ فقط در کد قابل ساخت است تا یک اشتباه در
   `config/local.toml` نتواند نوشتن روی ECU را فعال کند.
-- هنگام setup، تست و CI هیچ فرمانی به خودرو ارسال نمی‌شود (حتی با نصب `[obd]`، تست‌ها مسیر
-  آداپتور واقعی را با `monkeypatch` غیرفعال می‌کنند).
+- هنگام setup، تست و CI هیچ فرمانی به خودرو ارسال نمی‌شود و هیچ تستی پورت سریال باز نمی‌کند.
+  فهرست درگاه‌ها با یک ماژول pyserial جعلی تست می‌شود و آداپتور واقعی هنوز وجود ندارد.
+- انتخاب «آداپتور واقعی» در داشبورد **هرگز** بی‌صدا به شبیه‌ساز تبدیل نمی‌شود؛ تا Milestone 2
+  پیام صریح «پیاده‌سازی نشده» نشان داده می‌شود.
 - پیش‌نیازهای هر نوشتن آینده در `tuning/interfaces.py` (`BenchSafetyChecklist`) فهرست شده‌اند.
 
 ## پیش‌نیازها
@@ -172,8 +183,10 @@ iran-obd-tuner-gui
 کدهای خروجی: `0` موفق، `1` خطای اجرا، `2` خطای کاربرد/پیکربندی، `130` قطع با Ctrl+C.
 
 در داشبورد: حالت «شبیه‌سازی» را انتخاب کنید و «اتصال» را بزنید تا بدون آداپتور، گیج‌ها و
-نمودار زنده کار کنند. برای ضبط داده در CSV، دکمه ⏺ در نوار ابزار را بزنید (جزئیات در بخش
-«ضبط داده در CSV»). روی ماشین بدون نمایشگر (CI/سرور) می‌توانید اجرا را با
+نمودار زنده کار کنند. پارامتری که خوانده نشود با «—» و دلیلش (مثلاً «پشتیبانی نمی‌شود»)
+نمایش داده می‌شود، نه با صفر. داشبورد همان تنظیمات CLI را می‌خواند (`config/local.toml` و
+متغیرهای `IRAN_OBD_TUNER_*`). برای ضبط داده در CSV، دکمه ⏺ در نوار ابزار را بزنید (جزئیات
+در بخش «ضبط داده در CSV»). روی ماشین بدون نمایشگر (CI/سرور) می‌توانید اجرا را با
 `QT_QPA_PLATFORM=offscreen` بالا بیاورید.
 
 ## تست و کیفیت کد
@@ -185,9 +198,13 @@ python -m ruff format --check .  # بررسی قالب‌بندی
 python scripts/check.py          # هر سه گیت بالا با هم (همان چیزی که CI اجرا می‌کند)
 ```
 
-تست‌های رابط گرافیکی (`tests/integration/test_gui_window.py`) روی پلتفرم `offscreen` کوت‌اجرا
-می‌شوند و اگر `[gui]` نصب نباشد خودکار skip می‌شوند؛ بنابراین مجموعه تست همیشه بدون
-نمایشگر و بدون سخت‌افزار سبز می‌ماند.
+`scripts/check.py` سخت‌گیر است: اگر ruff یا pytest نصب نباشد، آن گیت **شکست** حساب می‌شود،
+نه skip. فقط با `--allow-missing` ابزار غایب به‌صورت «skipped» گزارش می‌شود.
+
+تست‌های رابط گرافیکی (`tests/integration/test_gui_window.py`) روی پلتفرم `offscreen` اجرا
+می‌شوند و از سیم‌کشی واقعی برنامه (`AppDashboardBackend`) استفاده می‌کنند. اگر `[gui]` نصب
+نباشد، خودکار skip می‌شوند. برای اجرای آن‌ها روی ماشین خودتان `pip install -e ".[dev,gui]"`
+لازم است.
 
 CI (`.github/workflows/ci.yml`) روی پایتون ۳٫۱۱، ۳٫۱۲ و ۳٫۱۳ همین سه گیت را اجرا می‌کند.
 extras سخت‌افزاری/گرافیکی عمداً در CI نصب نمی‌شوند (نیاز به سخت‌افزار واقعی و تست دستی دارند).
@@ -197,13 +214,13 @@ extras سخت‌افزاری/گرافیکی عمداً در CI نصب نمی‌�
 ```
 iran-obd-tuner/
 ├─ src/iran_obd_tuner/               کد برنامه (بسته واقعی، src-layout)
-│  ├─ app/                           ورودی‌ها و سیم‌کشی: cli.py، gui_main.py، application.py
+│  ├─ app/                           ورودی‌ها و سیم‌کشی: cli.py، gui_main.py، application.py، dashboard.py
 │  ├─ core/                          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC، مرز ایمنی
-│  ├─ hardware/                      قرارداد آداپتور (base.py)، شبیه‌ساز (mock.py)، رجیستری
-│  ├─ diagnostics/                   جریان تشخیص (service.py)، سرویس داشبورد (obd_service.py)، ضبط CSV (recorder.py)
+│  ├─ hardware/                      قرارداد آداپتور (base.py)، شبیه‌ساز (mock.py)، رجیستری، فهرست درگاه‌ها
+│  ├─ diagnostics/                   گزارش یک‌باره (service.py)، نشست داده زنده (live_data.py)، ضبط CSV (recorder.py)
 │  ├─ database/                      دیتابیس دانش (JSON) + داده‌های همراه بسته
 │  ├─ tuning/                        رابط‌های Bench و پیش‌نیازهای نوشتن (بدون پیاده‌سازی)
-│  └─ ui/                            داشبورد PySide6: gauges.py، i18n.py، icon.py، main_window.py
+│  └─ ui/                            داشبورد PySide6: backend.py، gauges.py، i18n.py، icon.py، safety_modal.py، main_window.py
 ├─ tests/                            unit/ ، integration/ (CLI + GUI)، fixtures/
 ├─ config/example.toml               نمونه پیکربندی (کپی به config/local.toml)
 ├─ docs/                             idea-report.md، architecture.md، development.md
@@ -220,8 +237,10 @@ iran-obd-tuner/
 > `src/main.py` نوشته شده بودند) با `git mv` به همان بسته منتقل شدند:
 > `src/ui/gauges.py` → `ui/gauges.py`، `src/ui/i18n.py` → `ui/i18n.py`،
 > `src/ui/main_window.py` → `ui/main_window.py`، `src/diagnostics/obd_service.py` →
-> `diagnostics/obd_service.py`، `src/main.py` → `app/gui_main.py`. هیچ کدی حذف نشد؛
-> تاریخچه فایل‌ها در گیت حفظ شده است (git rename). جزئیات در `docs/architecture.md`.
+> `diagnostics/obd_service.py`، `src/main.py` → `app/gui_main.py`. در آن مرحله هیچ کدی حذف نشد؛
+> تاریخچه فایل‌ها در گیت حفظ شده است (git rename). در Milestone 1، `diagnostics/obd_service.py`
+> (همراه مسیر python-OBD پاک کردن کدها) و `tuning/ecu_id.py` با تأیید صاحب پروژه حذف شدند و
+> داشبورد به `diagnostics/live_data.py` منتقل شد. جزئیات در `docs/architecture.md` (ADR ۱۲).
 
 ## مستندات
 
@@ -234,9 +253,10 @@ iran-obd-tuner/
 ## نقشه راه
 
 - **فاز ۰ (انجام‌شده):** ساختار پروژه، مرز ایمنی، جریان تشخیص شبیه‌سازی‌شده، تست و CI
-- **فاز ۱ (نیمه‌انجام‌شده):** داشبورد PySide6 ادغام شده و با داده شبیه‌سازی‌شده کار می‌کند.
-  فیچرهای تکمیلی داشبورد (بازخوانی درگاه، ضبط CSV، نوار وضعیت، ترجمه کامل پیام‌ها، آیکون) اضافه شده‌اند.
-  آداپتور واقعی ELM327 (فقط‌خواندنی) و یکسان‌سازی سرویس داشبورد با `ObdAdapter` باقی مانده است.
+- **فاز ۱ (نیمه‌انجام‌شده):** داشبورد PySide6 با داده شبیه‌سازی‌شده کار می‌کند. Milestone 1
+  انجام شده است: داشبورد و CLI حالا یک مسیر داده واحد (`ObdAdapter`) دارند، داده ساختگی و
+  مسیر پاک کردن کدها حذف شده و داده شبیه‌سازی همه‌جا برچسب دارد. آداپتور واقعی ELM327
+  (فقط‌خواندنی) با خواندن در پس‌زمینه باقی مانده است (Milestone 2).
 - **فاز ۲:** CAN و UDS، شناسایی VIN و خانواده ECU
 - **فاز ۳:** دیتابیس دانش خودروهای ایرانی بر پایه شواهد مستند
 - **فاز ۴:** خواندن و ویرایش ROM در Bench + تصحیح چک‌سام (نیازمند تأیید)

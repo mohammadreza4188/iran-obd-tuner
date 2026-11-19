@@ -138,6 +138,7 @@ class DiagnosticReport:
                 "hardware_required": self.adapter.hardware_required,
                 "protocols": list(self.adapter.protocols),
                 "notes": self.adapter.notes,
+                "simulated": self.adapter.simulated,
             },
             "measurements": [m.as_dict() for m in self.measurements],
             "supported_pids": list(self.supported_pids),

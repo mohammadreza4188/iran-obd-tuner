@@ -55,3 +55,22 @@ def adapter_factory():
 def adapter(adapter_factory) -> MockObdAdapter:
     """Simulated adapter with the built-in default scenario."""
     return adapter_factory()
+
+
+class FakeClock:
+    """Manually advanced monotonic clock for time-dependent simulations."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def fake_clock() -> FakeClock:
+    """A clock that only moves when the test says so."""
+    return FakeClock()

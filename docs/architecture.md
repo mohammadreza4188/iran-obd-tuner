@@ -43,6 +43,13 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 - import کتابخانه‌های خارجی (`python-obd`, `PySide6`, `python-can`, `udsoncan`) فقط داخل
   ماژول همان آداپتور/رابط انجام می‌شود، نه در `__init__` بسته‌ها — تا نبودِ آن وابستگی
   «قابل گزارش» بماند و برنامه بدون آن هم اجرا شود.
+- `ui` هیچ‌وقت آداپتور انتخاب نمی‌کند و `hardware`/`database`/`tuning` را import نمی‌کند. پنجره
+  یک `ui.backend.DashboardBackend` (Protocol) دریافت می‌کند که `app/dashboard.py` آن را
+  پیاده می‌کند.
+- این قواعد فقط روی کاغذ نیستند: `tests/unit/test_architecture.py` importهای همه ماژول‌ها را با
+  AST بررسی می‌کند. چند چیز دیگر را هم ممنوع می‌کند: import کتابخانه خارجی در سطح ماژول (به جز
+  PySide6 در `ui` و ورودی GUI)، import تنبل (داخل تابع) بیرون از `hardware`، و هر ارجاع به
+  دستور `CLEAR_DTC`.
 
 جدول کامل کاتالوگ مسیرها:
 
@@ -55,18 +62,22 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `core/dtc.py` | ساختار کد خطا (سیستم/مرجع بودن) طبق SAE J2012 | پیاده‌شده |
 | `core/safety.py` | `OperationClass`, `SafetyPolicy`, `require()` | پیاده‌شده |
 | `core/exceptions.py` | درخت خطاها با ریشه `IranObdTunerError` | پیاده‌شده |
-| `hardware/base.py` | `ObdAdapter` (چرخه اتصال، خواندن‌ها، رد عملیات نوشتنی) | پیاده‌شده |
-| `hardware/mock.py` | `MockObdAdapter`, `MockScenario`, `FailureMode` | پیاده‌شده |
+| `hardware/base.py` | `ObdAdapter` (چرخه اتصال، خواندن‌ها، رد عملیات نوشتنی)، `AdapterInfo.simulated` | پیاده‌شده |
+| `hardware/mock.py` | `MockObdAdapter`, `MockScenario` (ایستا + `drive_cycle`)، `FailureMode`، `MotionProfile` | پیاده‌شده |
 | `hardware/registry.py` | اعلام آداپتورها + ساخت آداپتور | پیاده‌شده |
-| `diagnostics/service.py` | `DiagnosticService.collect_report()` | پیاده‌شده |
+| `hardware/serial_ports.py` | فهرست درگاه‌های سریال بدون باز کردن آن‌ها (pyserial تنبل) | پیاده‌شده |
+| `diagnostics/service.py` | `DiagnosticService.collect_report()` + تفسیر مشترک کد خطا و شناسه خودرو | پیاده‌شده |
+| `diagnostics/live_data.py` | `LiveDataSession`, `LiveSnapshot`, `PidReading`, `PidStatus` | پیاده‌شده |
+| `diagnostics/recorder.py` | `CsvRecorder` (UTC، واحد، ستون `simulated`) | پیاده‌شده |
 | `diagnostics/models.py` | `TroubleCode`, `DiagnosticReport` | پیاده‌شده |
-| `diagnostics/obd_service.py` | `ObdService`: python-OBD اختیاری + شبیه‌سازی برای داشبورد | پیاده‌شده (مسیر خام، در حال یکسان‌سازی) |
 | `database/repository.py` | `KnowledgeRepository` + پیاده‌سازی JSON | پیاده‌شده |
 | `database/data/dtc_catalog.json` | زیرمجموعه دستی کدهای خطای عمومی | پیاده‌شده (غیرمرجع) |
 | `tuning/interfaces.py` | `CalibrationReader/Writer`, `BenchSafetyChecklist` | فقط قرارداد |
 | `app/cli.py`, `app/application.py` | CLI و سیم‌کشی | پیاده‌شده |
-| `app/gui_main.py` | ورودی داشبورد (`iran-obd-tuner-gui`) | پیاده‌شده (نیازمند `[gui]`) |
-| `ui/gauges.py`, `ui/i18n.py`, `ui/main_window.py` | ویجت گیج، رشته‌های فارسی/انگلیسی، پنجره اصلی | پیاده‌شده (نیازمند `[gui]`) |
+| `app/dashboard.py` | `AppDashboardBackend`: انتخاب آداپتور برای حالت شبیه‌سازی/واقعی | پیاده‌شده |
+| `app/gui_main.py` | ورودی داشبورد (`iran-obd-tuner-gui`): تنظیمات + لاگ + backend | پیاده‌شده (نیازمند `[gui]`) |
+| `ui/backend.py` | قرارداد `DashboardBackend` (بدون Qt) | پیاده‌شده |
+| `ui/gauges.py`, `ui/i18n.py`, `ui/main_window.py`, `ui/safety_modal.py`, `ui/icon.py` | ویجت گیج، رشته‌های فارسی/انگلیسی، پنجره اصلی، پنجره رد ایمنی، آیکون | پیاده‌شده (نیازمند `[gui]`؛ `i18n` بدون Qt) |
 
 ---
 
@@ -85,9 +96,26 @@ CLI/UI
                  → DiagnosticReport.read_only = True
 ```
 
+جریان داشبورد (نشست پایدار، روی همان قرارداد):
+
+```
+app.gui_main → load_settings + configure_logging → AppDashboardBackend
+  └─ ui.MainWindow(backend)
+       └─ backend.create_session(simulation, port)   ← شبیه‌سازی: mock + drive_cycle
+            │                                           واقعی: elm327 (فعلاً AdapterNotImplementedError)
+            └─ diagnostics.LiveDataSession
+                 ├─ connect()                         ← خطای اتصال = خطا، بدون جایگزینی با شبیه‌ساز
+                 ├─ poll(DASHBOARD_PIDS)  → LiveSnapshot (وضعیت جدا برای هر PID، بدون مقدار جایگزین)
+                 ├─ read_trouble_codes()  → TroubleCode[] (شکست = خطا، نه «کدی نیست»)
+                 ├─ read_vehicle_info()   → VehicleInfo (با simulated)
+                 └─ request_clear_trouble_codes()  → گارد ایمنی آداپتور → SafetyGuardError
+```
+
 نکات طراحی:
 
 - آداپتور **خام** برمی‌گرداند (کد خطا به‌صورت رشته)؛ تفسیر و توضیح کار لایه تشخیص است.
+- اینکه داده شبیه‌سازی‌شده است، از `AdapterInfo.simulated` می‌آید که صریح اعلام می‌شود، نه از
+  نوع آداپتور. این پرچم در گزارش، `LiveSnapshot`، CSV و رابط کاربری حمل می‌شود.
 - PID پشتیبانی‌نشده استثنا پرتاب می‌کند؛ در خواندن گروهی به `skipped_pids` تبدیل می‌شود تا
   در گزارش دیده شود (نه پنهان).
 - توضیح نبودن برای یک کد خطا یک نتیجه معتبر است (`description unknown`)، نه خطا.
@@ -122,25 +150,26 @@ class OperationClass(StrEnum):
 DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
 ```
 
-- `core.safety.require(...)` تنها دروازه است؛ `ObdAdapter.clear_diagnostic_trouble_codes()`،
-  `ObdService.clear_dtc()` (سرویس داشبورد) و `tuning.interfaces.assert_write_allowed()` از آن
-  عبور می‌کنند.
+- `core.safety.require(...)` تنها دروازه است؛ `ObdAdapter.clear_diagnostic_trouble_codes()`
+  (که داشبورد از طریق `LiveDataSession.request_clear_trouble_codes()` به آن می‌رسد) و
+  `tuning.interfaces.assert_write_allowed()` از آن عبور می‌کنند.
 - سیاست ایمنی **از تنظیمات/محیط خوانده نمی‌شود**؛ فقط در کد ساخته می‌شود. یک فایل تنظیمات
   اشتباه نمی‌تواند نوشتن روی ECU را فعال کند.
 - در آداپتور شبیه‌ساز، حتی با سیاست اجازه‌دهنده هم پیاده‌سازی وجود ندارد:
   `UnsupportedOperationError`.
-- **مسیر پاک کردن کدهای خطا در داشبورد:** `ObdService.clear_dtc()` ابتدا از گارد عبور می‌کند و
-  با سیاست پیش‌فرض `SafetyGuardError` می‌دهد. کد فراخوانی python-OBD برای سرویس ۰۴ در همان
-  تابع **حفظ شده ولی زیر سیاست پیش‌فرض غیرقابل‌دسترس** است (کار همکار فاز ۱ از بین نرفت).
-  رابط کاربری این رد شدن را می‌گیرد، به کاربر پیام می‌دهد و در لاگ ثبت می‌کند؛ بنابراین
-  «پاک کردن کدها» در این نسخه هیچ تغییری روی هیچ خودرویی ایجاد نمی‌کند. فعال‌کردن آن نیازمند
-  تأیید صریح تیم است (بخش ۱۱، مورد ۶).
+- **مسیر پاک کردن کدهای خطا در داشبورد:** دکمه «پاک کردن کدها» درخواست را به
+  `ObdAdapter.clear_diagnostic_trouble_codes()` می‌فرستد که با سیاست پیش‌فرض
+  `SafetyGuardError` و با هر سیاست دیگری `UnsupportedOperationError` می‌دهد. رابط کاربری یک
+  پنجره توضیح (غیرمسدودکننده) نشان می‌دهد و رویداد را در لاگ ثبت می‌کند. **هیچ پیاده‌سازی
+  سرویس ۰۴ در کد وجود ندارد.** کد python-OBD قبلی (`ObdService.clear_dtc`) در Milestone 1 با
+  تأیید صاحب پروژه حذف شد. `tests/unit/test_architecture.py` شکست می‌خورد اگر `CLEAR_DTC`
+  دوباره ظاهر شود یا کلاسی این متد را override کند.
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
 - **این پروژه هیچ عملیات فلش، دور زدن Security Access یا فرمان مخرب ECU را پیاده نمی‌کند و در
-  setup/تست/CI هیچ فرمانی به خودرو ارسال نمی‌شود.** تست‌های مسیر واقعی، وابستگی اختیاری را با
-  `monkeypatch` حذف می‌کنند تا هرگز پورت سریال باز نشود.
+  setup/تست/CI هیچ فرمانی به خودرو ارسال نمی‌شود.** هیچ تستی پورت سریال باز نمی‌کند: فهرست
+  درگاه‌ها فقط سیستم‌عامل را پرس‌وجو می‌کند و در تست با ماژول pyserial جعلی جایگزین می‌شود.
 
 هر قابلیت نوشتنی در آینده نیازمند: تأیید صریح کارفرما/تیم، شواهد مستند برای خانواده ECU هدف
 (الگوریتم چک‌سام، طرح Security Access، چیدمان حافظه)، تست کنترل‌شده روی ECU آزمایشگاهی و
@@ -199,23 +228,30 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۷ | ruff به‌عنوان تنها ابزار لینت و فرمت | یک ابزار، یک پیکربندی، سرعت بالا | black + flake8 + isort |
 | ۸ | نسخه فقط در `src/iran_obd_tuner/__init__.py` | یک منبع حقیقت؛ `pyproject` آن را داینامیک می‌خواند | نسخه تکراری در دو فایل |
 | ۹ | انتقال کد فاز ۱ با `git mv` بدون بازنویسی منطق | کار همکار حفظ می‌شود، تاریخچه فایل‌ها می‌ماند، diff قابل بازبینی است | بازنویسی UI روی `DiagnosticService` در همین PR |
-| ۱۰ | عبور دادن `ObdService.clear_dtc()` از گارد ایمنی و غیرقابل‌دسترس کردن مسیر واقعی | قواعد پروژه: هر عملیات تغییردهنده وضعیت باید رد شود؛ کد حفظ می‌شود | حذف کامل قابلیت یا فعال گذاشتن آن |
-| ۱۱ | تست گرافیکی روی پلتفرم `offscreen` + `importorskip` | مجموعه تست بدون نمایشگر/سخت‌افزار سبز می‌ماند و با نصب PySide6 واقعاً اجرا می‌شود | وابسته کردن کل تست‌ها به Qt |
+| ۱۰ | ~~عبور دادن `ObdService.clear_dtc()` از گارد ایمنی و غیرقابل‌دسترس کردن مسیر واقعی~~ — **جایگزین شد با ADR ۱۲** | | |
+| ۱۱ | تست گرافیکی روی پلتفرم `offscreen` + `importorskip` | مجموعه تست بدون نمایشگر/سخت‌افزار اجرا می‌شود و با نصب PySide6 واقعاً GUI را تست می‌کند | وابسته کردن کل تست‌ها به Qt |
+| ۱۲ | (Milestone 1) حذف `ObdService` و هر پیاده‌سازی سرویس ۰۴؛ داشبورد روی `LiveDataSession` + `ObdAdapter` | یک مسیر داده، یک مدل (`Measurement`)، یک مرز ایمنی؛ قابلیت نوشتن پنهان باقی نمی‌ماند | نگه داشتن مسیر python-OBD پشت policy |
+| ۱۳ | (Milestone 1) `ui` فقط یک Protocol (`DashboardBackend`) می‌شناسد و `app` آن را پیاده می‌کند | UI آداپتور انتخاب نمی‌کند، تست‌ها backend دلخواه می‌دهند، `ui → app` ایجاد نمی‌شود | ساخت آداپتور داخل `MainWindow` |
+| ۱۴ | (Milestone 1) هیچ مقدار جایگزین: هر PID وضعیت دارد و خانه CSV خالی می‌ماند | عدد ساختگی (مثل ۱۲٫۶ ولت یا صفر) قابل تشخیص از داده واقعی نیست | مقدار پیش‌فرض برای PID ناموفق |
+| ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
-### بدهی فنی (Known debt) تا فاز بعدی
+### بدهی فنی (Known debt)
 
-کد فاز ۱ به‌صورت «همان‌طور که کار می‌کند» ادغام شد؛ سه ناهمگونی شناخته‌شده باقی مانده که باید
-در یک تسک مستقل و با تأیید تیم یکسان‌سازی شوند:
+سه ناهمگونی که در ادغام فاز ۱ ثبت شده بود (دو مسیر خواندن، `SAMPLE_DTC` تکراری، `LiveSample`
+بدون واحد و زمان) در **Milestone 1 برطرف شدند** (ADR ۱۲ تا ۱۴). بدهی باقی‌مانده:
 
-1. **دو مسیر خواندن موازی:** `diagnostics/obd_service.py` (`ObdService` + `LiveSample`) و
-   `hardware/base.py` + `diagnostics/service.py` (`ObdAdapter` + `Measurement` + `DiagnosticReport`).
-   هدف: `ObdService` پشت `ObdAdapter` قرار گیرد تا مدل داده و مرز ایمنی یکی شود.
-2. **داده تکراری کدهای خطا:** `ui/i18n.py` فهرست `SAMPLE_DTC` را نگه می‌دارد، در حالی که منبع
-   حقیقت `database/data/dtc_catalog.json` (+ ترجمه‌ها) است.
-3. **`LiveSample` بدون واحد/زمان:** `Measurement` واحد، PID و timestamp دارد؛ `LiveSample` نه.
-   یکسان‌سازی، خروجی CSV/گزارش داشبورد را ممکن می‌کند.
-
-تا آن زمان، این وضعیت در README و همین سند به‌عنوان «در حال یکسان‌سازی» مستند است.
+1. **خواندن روی thread اصلی GUI:** برای شبیه‌ساز درون‌حافظه‌ای مشکلی نیست. برای ELM327 باید
+   در Milestone 2 یک worker پس‌زمینه اضافه شود.
+2. **`VehicleInfo.protocol`** از اولین پروتکل اعلام‌شده در `AdapterInfo.protocols` پر می‌شود، نه
+   از پروتکل مذاکره‌شده. آداپتور واقعی باید پروتکل فعال را گزارش کند (Milestone 2).
+3. **CI تست‌های GUI را اجرا نمی‌کند** (`[gui]` در CI نصب نمی‌شود). اگر یک job جدا با
+   PySide6 و `QT_QPA_PLATFORM=offscreen` اضافه شود، کهنه شدن تست‌های GUI دیده می‌شود.
+4. **پالت رنگ** در `gauges.py`، `main_window.py` و `safety_modal.py` تکرار شده است و آیکون هنوز
+   پالت آبی قدیمی را دارد. فونت `Vazirmatn-Regular.ttf` در مخزن نیست، پس همیشه فونت جایگزین
+   بارگذاری می‌شود.
+5. **وابستگی‌ها:** `pyqtgraph` در `[gui]` تعریف شده ولی هیچ جا import نمی‌شود. `requirements.txt`
+   با `pyproject.toml` هم‌خوان نیست (`pyqtgraph`، `crcmod`).
+6. **توضیح کدهای خطا** فقط انگلیسی است. کاتالوگ فارسی نیازمند منبع مستند است.
 
 ### تصمیم‌هایی که نیازمند تأیید تیم است
 
@@ -232,11 +268,12 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
    پروژه باید تأیید و در صورت نیاز اصلاح شود.
 5. **`requirements.txt` در کنار `pyproject.toml`** — نسخه‌های موجود دست‌نخورده حفظ شدند، در
    حالی که extras در `pyproject.toml` تعریف شده‌اند. اگر این دوگانگی ناخواسته است، یکی حذف شود.
-6. **پاک کردن کدهای خطا (سرویس ۰۴)** — مسیر واقعی آن در `ObdService` وجود دارد ولی زیر سیاست
-   پیش‌فرض غیرقابل‌دسترس است. اگر تیم می‌خواهد فعال شود، نیاز است: تأیید صریح (CONTRIBUTING بخش ۸)،
-   سیاست کدی مخصوص، پیام تأیید چندمرحله‌ای در UI و ثبت در جدول قابلیت‌های README. گزینه دیگر،
-   حذف همان چند خط برای همیشه است.
-7. **یکسان‌سازی سرویس داشبورد با `ObdAdapter`** (بخش «بدهی فنی») — پیش از فاز ۲ تصمیم گرفته شود.
+6. ~~**پاک کردن کدهای خطا (سرویس ۰۴)**~~ — **تصمیم گرفته شد (Milestone 1):** مسیر python-OBD
+   حذف شد. هر پیاده‌سازی آینده نیازمند تأیید صریح، سیاست کدی مخصوص، تأیید چندمرحله‌ای در UI و
+   به‌روزرسانی جدول قابلیت‌هاست (CLAUDE.md بخش ۶).
+7. ~~**یکسان‌سازی سرویس داشبورد با `ObdAdapter`**~~ — **انجام شد (Milestone 1)**، ADR ۱۲.
+8. **پایه آداپتور ELM327 در Milestone 2** — python-OBD پشت `ObdAdapter`، یا یک درایور سبک
+   ELM327 روی pyserial همراه transport جعلی برای تست. پیش از شروع Milestone 2 تصمیم گرفته شود.
 
 ## ۱۰. خارج از محدوده این نسخه
 
@@ -244,4 +281,3 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 - هر نوع نوشتن/فلش/Security Access
 - نرمال‌سازی/دیتابیس ECU و نقشه‌ها (A2L/DAMOS)
 - ضبط بلندمدت Live Data، چند-خودرویی، شبکه/همگام‌سازی ابری
-- یکسان‌سازی مدل داده‌ی UI با `Measurement` (بدهی فنی، بخش ۹)

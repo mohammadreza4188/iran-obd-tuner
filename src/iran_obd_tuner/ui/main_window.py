@@ -1,9 +1,29 @@
-"""Phase 1 main window: dashboard, DTC list, settings and log. (Tailwind-inspired UI)"""
+"""Dashboard main window: gauges, live graph, trouble codes, identification, settings, log.
+
+Data flow (the only one in the project)::
+
+    MainWindow ─► DashboardBackend.create_session() ─► LiveDataSession ─► ObdAdapter
+
+The window never chooses an adapter and never touches a serial port: it asks the backend
+(implemented in the application layer) for a :class:`LiveDataSession` and polls it.
+
+Honesty rules visible here:
+
+* a parameter that could not be read is shown as "—" with its reason, never as ``0``;
+* a failed trouble code read is shown as an error, never as "no trouble codes";
+* simulated sessions show a permanent banner, and recordings carry a ``simulated`` column;
+* "clear codes" is forwarded to the adapter's safety gate, refused, and explained.
+
+Not implemented: background polling (all reads run on the GUI thread, which is fine for
+the in-memory simulator; a worker arrives with the ELM327 adapter), freeze frames, reports.
+"""
 
 from __future__ import annotations
 
+import html
 from collections import deque
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -16,7 +36,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -25,24 +44,108 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from iran_obd_tuner.core.exceptions import SafetyGuardError
-from iran_obd_tuner.diagnostics.obd_service import LiveSample, ObdService
+from iran_obd_tuner import __version__
+from iran_obd_tuner.core.exceptions import (
+    IranObdTunerError,
+    SafetyGuardError,
+    UnsupportedOperationError,
+)
+from iran_obd_tuner.core.logging import get_logger
+from iran_obd_tuner.core.models import VehicleInfo
+from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot, PidStatus
+from iran_obd_tuner.diagnostics.models import TroubleCode
 from iran_obd_tuner.diagnostics.recorder import CsvRecorder
-from iran_obd_tuner.tuning.ecu_id import MockEcuIdentifier
+from iran_obd_tuner.ui.backend import DashboardBackend
 from iran_obd_tuner.ui.gauges import GaugeCard
-from iran_obd_tuner.ui.i18n import COPY, Lang
+from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
 from iran_obd_tuner.ui.icon import build_icon
 from iran_obd_tuner.ui.safety_modal import SafetyModal
 
+__all__ = ["DASHBOARD_PIDS", "GAUGES", "GaugeSpec", "MainWindow"]
+
+_LOG = get_logger("ui.main_window")
+
+#: Port selector entry meaning "let the adapter choose".
+AUTO_PORT = "auto"
+
+POLL_INTERVAL_MS = 250
+
+
+@dataclass(frozen=True, slots=True)
+class GaugeSpec:
+    """One dashboard gauge and the OBD-II parameter it shows."""
+
+    key: str
+    pid: str
+    unit_key: str
+    minimum: float
+    maximum: float
+    digits: int = 0
+
+
+#: Dashboard gauges, in display order. Temperature scales start at -40 °C, the lowest value
+#: the OBD-II temperature PIDs can encode.
+GAUGES: tuple[GaugeSpec, ...] = (
+    GaugeSpec("rpm", "010C", "rpm", 0, 7000),
+    GaugeSpec("speed", "010D", "kmh", 0, 220),
+    GaugeSpec("coolant", "0105", "c", -40, 130),
+    GaugeSpec("voltage", "0142", "v", 0, 16, digits=1),
+    GaugeSpec("fuel", "012F", "pct", 0, 100),
+    GaugeSpec("throttle", "0111", "pct", 0, 100),
+    GaugeSpec("iat", "010F", "c", -40, 80),
+    GaugeSpec("load", "0104", "pct", 0, 100),
+)
+
+#: Parameters polled for the dashboard (and recorded to CSV), in gauge order.
+DASHBOARD_PIDS: tuple[str, ...] = tuple(spec.pid for spec in GAUGES)
+
+_PAGES: tuple[tuple[str, ...], ...] = (
+    ("rpm", "speed", "coolant", "voltage", "fuel"),
+    ("throttle", "iat", "load"),
+)
+
+_STATUS_KEYS = {
+    PidStatus.UNSUPPORTED: "unsupported",
+    PidStatus.NO_RESPONSE: "no_response",
+    PidStatus.MALFORMED: "malformed",
+}
+
+_TAB_STYLE_ACTIVE = (
+    "background-color: #6366f1; color: #ffffff; border: none; border-radius: 8px; "
+    "padding: 8px 16px; font-weight: bold;"
+)
+_TAB_STYLE_IDLE = (
+    "background-color: transparent; color: #94a3b8; border: none; border-radius: 8px; "
+    "padding: 8px 16px;"
+)
+_PILL_STYLE_ACTIVE = (
+    "background:#6366f1; color:#ffffff; border-radius:12px; padding:6px 16px; font-weight:bold;"
+)
+_PILL_STYLE_IDLE = (
+    "background:#1e293b; color:#94a3b8; border-radius:12px; padding:6px 16px; "
+    "font-weight:bold; border:1px solid #334155;"
+)
+_RECORD_STYLE_ACTIVE = (
+    "background-color: #ef4444; color: #ffffff; border: none; border-radius: 8px; "
+    "padding: 8px 16px; font-weight: bold;"
+)
+
 
 class Sparkline(QWidget):
-    def __init__(self, parent=None) -> None:
+    """Rolling RPM/speed graph. Missing samples leave a gap instead of a fake zero."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._rpm: deque[float] = deque(maxlen=60)
-        self._speed: deque[float] = deque(maxlen=60)
+        self._rpm: deque[float | None] = deque(maxlen=60)
+        self._speed: deque[float | None] = deque(maxlen=60)
         self.setMinimumHeight(220)
 
-    def push(self, rpm: float, speed: float) -> None:
+    @property
+    def sample_count(self) -> int:
+        """Number of samples currently held."""
+        return len(self._rpm)
+
+    def push(self, rpm: float | None, speed: float | None) -> None:
         self._rpm.append(rpm)
         self._speed.append(speed)
         self.update()
@@ -62,48 +165,71 @@ class Sparkline(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "—")
             return
 
-        def draw_series(values: deque[float], color: QColor, vmax: float) -> None:
-            if not values:
-                return
+        def draw_series(values: deque[float | None], color: QColor, vmax: float) -> None:
             w = max(1, self.width() - 20)
             h = max(1, self.height() - 20)
             step = w / max(1, len(values) - 1)
-            pen = QPen(color, 2)
-            painter.setPen(pen)
-            points = []
-            for i, v in enumerate(values):
-                x = 10 + i * step
-                y = 10 + h * (1.0 - min(1.0, v / vmax))
-                points.append((x, y))
-            for i in range(1, len(points)):
-                painter.drawLine(int(points[i - 1][0]), int(points[i - 1][1]), int(points[i][0]), int(points[i][1]))
+            painter.setPen(QPen(color, 2))
+            previous: tuple[float, float] | None = None
+            for i, value in enumerate(values):
+                if value is None:
+                    previous = None
+                    continue
+                point = (10 + i * step, 10 + h * (1.0 - min(1.0, max(0.0, value / vmax))))
+                if previous is not None:
+                    painter.drawLine(
+                        int(previous[0]), int(previous[1]), int(point[0]), int(point[1])
+                    )
+                previous = point
 
         draw_series(self._rpm, QColor("#6366f1"), 7000)
         draw_series(self._speed, QColor("#f1f5f9"), 220)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    """The dashboard window.
+
+    Args:
+        backend: Application services (session factory, port list, output directory).
+    """
+
+    def __init__(self, backend: DashboardBackend) -> None:
         super().__init__()
         self.lang: Lang = "fa"
-        self.service = ObdService()
-        self.service.on_log = self._append_log
+        self._backend = backend
+        self._session: LiveDataSession | None = None
         self.recorder = CsvRecorder()
         self._page = 0
+        self._last_snapshot: LiveSnapshot | None = None
+        self._dtc_state: tuple[TroubleCode, ...] | str | None = None
+        # Vehicle identification, or (i18n key, error detail) when it is not available.
+        self._ident_state: VehicleInfo | tuple[str, str] | None = None
+        self._safety_modal: SafetyModal | None = None
 
         self.setMinimumSize(1100, 800)
         self.setWindowIcon(build_icon())
         self.status_bar = self.statusBar()
         self.recording_label = QLabel("")
         self.status_bar.addPermanentWidget(self.recording_label)
-        
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(POLL_INTERVAL_MS)
+        self.timer.timeout.connect(self._tick)
+
         self._build_ui()
         self._apply_language()
         self._apply_theme()
 
-        self.timer = QTimer(self)
-        self.timer.setInterval(250)
-        self.timer.timeout.connect(self._tick)
+    # ------------------------------------------------------------------ state
+    @property
+    def session(self) -> LiveDataSession | None:
+        """The open session, or ``None`` when disconnected."""
+        return self._session
+
+    @property
+    def connected(self) -> bool:
+        """Whether a session is open."""
+        return self._session is not None and self._session.is_connected
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -115,8 +241,6 @@ class MainWindow(QMainWindow):
 
         # --- Header ---
         header = QHBoxLayout()
-        
-        # Icon & Title
         title_box = QVBoxLayout()
         self.edition_label = QLabel()
         self.edition_label.setStyleSheet("color: #6366f1; font-weight: 600; font-size: 12px;")
@@ -127,45 +251,40 @@ class MainWindow(QMainWindow):
         self.title_label.setFont(title_font)
         title_box.addWidget(self.edition_label)
         title_box.addWidget(self.title_label)
-        
         header.addLayout(title_box)
         header.addStretch()
 
-        # Version & Badges
         badge_box = QHBoxLayout()
         badge_box.setSpacing(8)
-        
-        self.version_label = QLabel("v0.2.0-phase2")
+        self.version_label = QLabel(f"v{__version__}")
         self.version_label.setStyleSheet("color: #94a3b8; font-family: monospace; font-size: 12px;")
-        
-        self.guard_badge = QLabel("READ-ONLY GUARD 🛡️")
+        self.guard_badge = QLabel()
         self.guard_badge.setStyleSheet(
-            "color: #10b981; font-weight: bold; font-size: 11px; border: 1px solid #10b981; border-radius: 4px; padding: 2px 8px;"
+            "color: #10b981; font-weight: bold; font-size: 11px; border: 1px solid #10b981; "
+            "border-radius: 4px; padding: 2px 8px;"
         )
-        
         self.status_pill = QLabel()
-        self.status_pill.setStyleSheet(
-            "background-color: #1e293b; color: #94a3b8; border-radius: 12px; padding: 6px 16px; font-weight: bold; border: 1px solid #334155;"
-        )
-        
         badge_box.addWidget(self.version_label)
         badge_box.addWidget(self.guard_badge)
         badge_box.addWidget(self.status_pill)
         header.addLayout(badge_box)
-        
         outer.addLayout(header)
         outer.addSpacing(8)
 
-        # --- Navbar Tabs ---
+        # --- Navbar tabs ---
         tab_row = QHBoxLayout()
         tab_row.setSpacing(8)
         self.tab_buttons: list[QPushButton] = []
-        self.tab_ids = ["dashboard", "graph", "diag", "ecu", "bench", "settings", "log"]
+        self.tab_ids = ["dashboard", "graph", "diag", "ident", "bench", "settings", "log"]
         self.tab_icons = {
-            "dashboard": "📊", "graph": "📈", "diag": "⚠️", 
-            "ecu": "📡", "bench": "🛠️", "settings": "⚙️", "log": "📝"
+            "dashboard": "📊",
+            "graph": "📈",
+            "diag": "⚠️",
+            "ident": "📡",
+            "bench": "🛠️",
+            "settings": "⚙️",
+            "log": "📝",
         }
-        
         for tab_id in self.tab_ids:
             btn = QPushButton()
             btn.setCheckable(True)
@@ -176,20 +295,19 @@ class MainWindow(QMainWindow):
             tab_row.addWidget(btn)
         tab_row.addStretch()
         outer.addLayout(tab_row)
-        
-        # Separator line
+
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("background-color: #334155;")
         outer.addWidget(line)
         outer.addSpacing(8)
 
-        # --- Toolbar (Port, Connect, Record) ---
+        # --- Toolbar (port, connect, record, pager) ---
         tool_frame = QFrame()
         tool_frame.setObjectName("tool_frame")
         tool_layout = QHBoxLayout(tool_frame)
         tool_layout.setContentsMargins(16, 12, 16, 12)
-        
+
         self.port_label = QLabel()
         self.port_combo = QComboBox()
         self.port_combo.setMinimumWidth(160)
@@ -197,14 +315,13 @@ class MainWindow(QMainWindow):
         self.refresh_ports_btn.setFixedSize(38, 38)
         self.refresh_ports_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_ports_btn.clicked.connect(self._refresh_ports)
-        self._reload_ports()
-        
+
         self.connect_btn = QPushButton()
         self.connect_btn.setMinimumHeight(38)
         self.connect_btn.setMinimumWidth(120)
         self.connect_btn.setCursor(Qt.PointingHandCursor)
         self.connect_btn.clicked.connect(self._toggle_connect)
-        
+
         self.record_btn = QPushButton("⏺")
         self.record_btn.setMinimumHeight(38)
         self.record_btn.setMinimumWidth(46)
@@ -229,8 +346,17 @@ class MainWindow(QMainWindow):
         tool_layout.addWidget(self.prev_btn)
         tool_layout.addWidget(self.page_label)
         tool_layout.addWidget(self.next_btn)
-        
         outer.addWidget(tool_frame)
+
+        # --- Simulation banner (visible only while a simulated session is open) ---
+        self.sim_banner = QLabel()
+        self.sim_banner.setWordWrap(True)
+        self.sim_banner.setStyleSheet(
+            "background-color: #422006; color: #fbbf24; border: 1px solid #b45309; "
+            "border-radius: 8px; padding: 8px 16px; font-weight: bold;"
+        )
+        self.sim_banner.setVisible(False)
+        outer.addWidget(self.sim_banner)
 
         # --- Pages ---
         self.stack = QStackedWidget()
@@ -240,19 +366,11 @@ class MainWindow(QMainWindow):
         dash = QWidget()
         self.gauge_grid = QGridLayout(dash)
         self.gauge_grid.setSpacing(16)
-        t = COPY[self.lang]
-        self.gauges = {
-            "rpm": GaugeCard(t["gauges"]["rpm"], t["units"]["rpm"], 7000),
-            "speed": GaugeCard(t["gauges"]["speed"], t["units"]["kmh"], 220),
-            "coolant": GaugeCard(t["gauges"]["coolant"], t["units"]["c"], 130),
-            "voltage": GaugeCard(t["gauges"]["voltage"], t["units"]["v"], 16, digits=1),
-            "fuel": GaugeCard(t["gauges"]["fuel"], t["units"]["pct"], 100),
-            "throttle": GaugeCard(t["gauges"]["throttle"], t["units"]["pct"], 100),
-            "iat": GaugeCard(t["gauges"]["iat"], t["units"]["c"], 80),
-            "load": GaugeCard(t["gauges"]["load"], t["units"]["pct"], 100),
+        self.gauges: dict[str, GaugeCard] = {
+            spec.key: GaugeCard("", "", spec.minimum, spec.maximum, digits=spec.digits)
+            for spec in GAUGES
         }
         self.stack.addWidget(dash)
-        self._layout_gauges()
 
         # Graph
         graph_page = QWidget()
@@ -261,7 +379,7 @@ class MainWindow(QMainWindow):
         graph_layout.addWidget(self.spark)
         self.stack.addWidget(graph_page)
 
-        # Diagnostics
+        # Trouble codes
         diag_page = QWidget()
         diag_layout = QVBoxLayout(diag_page)
         diag_header = QHBoxLayout()
@@ -276,58 +394,52 @@ class MainWindow(QMainWindow):
         diag_header.addWidget(self.refresh_dtc_btn)
         diag_header.addWidget(self.clear_dtc_btn)
         diag_layout.addLayout(diag_header)
+        self.dtc_note = QLabel()
+        self.dtc_note.setStyleSheet("color: #94a3b8;")
+        diag_layout.addWidget(self.dtc_note)
         self.dtc_list = QListWidget()
         diag_layout.addWidget(self.dtc_list)
         self.stack.addWidget(diag_page)
 
-        # ECU Identification
-        ecu_page = QWidget()
-        ecu_layout = QVBoxLayout(ecu_page)
-        
-        self.ecu_id_btn = QPushButton()
-        self.ecu_id_btn.setMinimumHeight(40)
-        self.ecu_id_btn.setMaximumWidth(300)
-        self.ecu_id_btn.clicked.connect(self._identify_ecu)
-        
-        self.ecu_result_frame = QFrame()
-        self.ecu_result_frame.setVisible(False)
-        result_layout = QVBoxLayout(self.ecu_result_frame)
-        self.ecu_result_label = QLabel("")
-        self.ecu_result_label.setStyleSheet("font-size: 14px; line-height: 1.8;")
-        self.ecu_result_label.setWordWrap(True)
-        result_layout.addWidget(self.ecu_result_label)
+        # Identification
+        ident_page = QWidget()
+        ident_layout = QVBoxLayout(ident_page)
+        self.ident_btn = QPushButton()
+        self.ident_btn.setMinimumHeight(40)
+        self.ident_btn.setMaximumWidth(340)
+        self.ident_btn.clicked.connect(self._read_identification)
+        self.ident_result_label = QLabel("")
+        self.ident_result_label.setStyleSheet("font-size: 14px;")
+        self.ident_result_label.setWordWrap(True)
+        self.ident_result_label.setTextFormat(Qt.RichText)
+        self.ident_result_label.setVisible(False)
+        ident_layout.addWidget(self.ident_btn, alignment=Qt.AlignCenter)
+        ident_layout.addSpacing(20)
+        ident_layout.addWidget(self.ident_result_label)
+        ident_layout.addStretch()
+        self.stack.addWidget(ident_page)
 
-        ecu_layout.addWidget(self.ecu_id_btn, alignment=Qt.AlignCenter)
-        ecu_layout.addSpacing(20)
-        ecu_layout.addWidget(self.ecu_result_frame)
-        ecu_layout.addStretch()
-        self.stack.addWidget(ecu_page)
-
-        # Bench
+        # Bench (not implemented: disabled placeholders that say so)
         bench_page = QWidget()
         bench_layout = QVBoxLayout(bench_page)
-        
         self.bench_title = QLabel()
         self.bench_title.setStyleSheet("color: #ef4444; font-size: 20px; font-weight: bold;")
         self.bench_title.setAlignment(Qt.AlignCenter)
-        
         self.bench_warning = QLabel()
         self.bench_warning.setWordWrap(True)
         self.bench_warning.setAlignment(Qt.AlignCenter)
         self.bench_warning.setStyleSheet(
-            "background-color: #1e293b; color: #94a3b8; padding: 16px; border-radius: 8px; border: 1px solid #334155; margin-top: 10px; margin-bottom: 20px;"
+            "background-color: #1e293b; color: #94a3b8; padding: 16px; border-radius: 8px; "
+            "border: 1px solid #334155; margin-top: 10px; margin-bottom: 20px;"
         )
-        
         btn_layout = QVBoxLayout()
         self.bench_btn_read = QPushButton()
         self.bench_btn_write = QPushButton()
         self.bench_btn_unlock = QPushButton()
-        
         for btn in (self.bench_btn_read, self.bench_btn_write, self.bench_btn_unlock):
             btn.setEnabled(False)
             btn.setMinimumHeight(40)
             btn_layout.addWidget(btn)
-
         bench_layout.addWidget(self.bench_title)
         bench_layout.addWidget(self.bench_warning)
         bench_layout.addLayout(btn_layout)
@@ -372,6 +484,7 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_list)
         self.stack.addWidget(log_page)
 
+        self._reload_ports()
         self._switch_tab("dashboard")
 
     def _layout_gauges(self) -> None:
@@ -379,16 +492,9 @@ class MainWindow(QMainWindow):
             item = self.gauge_grid.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
-
-        page0 = ["rpm", "speed", "coolant", "voltage", "fuel"]
-        page1 = ["throttle", "iat", "load"]
-        keys = page0 if self._page == 0 else page1
-        
-        for i, key in enumerate(keys):
+        for i, key in enumerate(_PAGES[self._page]):
             self.gauge_grid.addWidget(self.gauges[key], i // 3, i % 3)
-
-        t = COPY[self.lang]
-        self.page_label.setText(f"{t['page']} {self._page + 1}/2")
+        self.page_label.setText(f"{COPY[self.lang]['page']} {self._page + 1}/{len(_PAGES)}")
 
     def _set_page(self, page: int) -> None:
         self._page = page
@@ -399,15 +505,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.tab_buttons):
             btn.setChecked(i == index)
-            if i == index:
-                btn.setStyleSheet(
-                    "background-color: #6366f1; color: #ffffff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: bold;"
-                )
-            else:
-                btn.setStyleSheet(
-                    "background-color: transparent; color: #94a3b8; border: none; border-radius: 8px; padding: 8px 16px;"
-                )
-        
+            btn.setStyleSheet(_TAB_STYLE_ACTIVE if i == index else _TAB_STYLE_IDLE)
         visible = tab_id == "dashboard"
         self.prev_btn.setVisible(visible)
         self.next_btn.setVisible(visible)
@@ -418,52 +516,49 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(t["title"])
         self.edition_label.setText(t["edition"])
         self.title_label.setText(t["title"])
-        for btn, tab_id in zip(self.tab_buttons, self.tab_ids):
-            icon = self.tab_icons.get(tab_id, "")
-            btn.setText(f"{icon}  {t['tabs'][tab_id]}")
-            
+        self.guard_badge.setText(t["read_only_badge"])
+        for btn, tab_id in zip(self.tab_buttons, self.tab_ids, strict=True):
+            btn.setText(f"{self.tab_icons.get(tab_id, '')}  {t['tabs'][tab_id]}")
+
         self.port_label.setText(t["port"])
-        self.connect_btn.setText(t["connect"] if not self.service.connected else t["disconnect"])
+        self.refresh_ports_btn.setToolTip(t["refresh_ports"])
+        self.connect_btn.setText(t["disconnect"] if self.connected else t["connect"])
+        self.record_btn.setToolTip(
+            t["record_stop"] if self.recorder.recording else t["record_start"]
+        )
+        self.sim_banner.setText(t["sim_banner"])
         self.dtc_title.setText(t["dtc_title"])
+        self.dtc_note.setText(t["dtc_note"])
         self.refresh_dtc_btn.setText(t["refresh_dtc"])
         self.clear_dtc_btn.setText(t["clear_dtc"])
-        self.lang_label.setText(t["settings_lang"])
-        self.mode_label.setText(t["settings_mode"])
-        self.mode_combo.setItemText(0, t["mode_sim"])
-        self.mode_combo.setItemText(1, t["mode_real"])
-        self.sim_note.setText(t["sim_note"])
-        
-        self.ecu_id_btn.setText(t["ecu_id_btn"])
+        self.ident_btn.setText(t["ident_btn"])
         self.bench_title.setText(t["bench_title"])
         self.bench_warning.setText(t["bench_warning"])
         self.bench_btn_read.setText(t["bench_btn_read"])
         self.bench_btn_write.setText(t["bench_btn_write"])
         self.bench_btn_unlock.setText(t["bench_btn_unlock"])
-        
+        self.lang_label.setText(t["settings_lang"])
+        self.mode_label.setText(t["settings_mode"])
+        self.mode_combo.setItemText(0, t["mode_sim"])
+        self.mode_combo.setItemText(1, t["mode_real"])
+        self.sim_note.setText(t["sim_note"])
+
+        for spec in GAUGES:
+            self.gauges[spec.key].set_label(t["gauges"][spec.key])
+            self.gauges[spec.key].set_unit(t["units"][spec.unit_key])
+
         self._update_status_pill()
+        self._render_snapshot()
+        self._render_dtc()
+        self._render_identification()
+        self._update_recording_label()
 
-        mapping = {
-            "rpm": (t["gauges"]["rpm"], t["units"]["rpm"]),
-            "speed": (t["gauges"]["speed"], t["units"]["kmh"]),
-            "coolant": (t["gauges"]["coolant"], t["units"]["c"]),
-            "voltage": (t["gauges"]["voltage"], t["units"]["v"]),
-            "fuel": (t["gauges"]["fuel"], t["units"]["pct"]),
-            "throttle": (t["gauges"]["throttle"], t["units"]["pct"]),
-            "iat": (t["gauges"]["iat"], t["units"]["c"]),
-            "load": (t["gauges"]["load"], t["units"]["pct"]),
-        }
-        for key, (label, unit) in mapping.items():
-            self.gauges[key].set_label(label)
-            self.gauges[key].gauge.set_unit(unit)
-
-        direction = Qt.RightToLeft if self.lang == "fa" else Qt.LeftToRight
-        self.setLayoutDirection(direction)
+        self.setLayoutDirection(Qt.RightToLeft if self.lang == "fa" else Qt.LeftToRight)
         self._layout_gauges()
 
     def _apply_theme(self) -> None:
         font_id = QFontDatabase.addApplicationFont("Vazirmatn-Regular.ttf")
         font_family = "Vazirmatn" if font_id != -1 else "Segoe UI"
-        
         self.setStyleSheet(
             f"""
             * {{ font-family: '{font_family}', 'Tahoma', sans-serif; }}
@@ -486,7 +581,10 @@ class MainWindow(QMainWindow):
             QPushButton:pressed {{ background-color: #4338ca; }}
             QPushButton:disabled {{ background-color: #334155; color: #64748b; }}
             QLabel {{ color: #f1f5f9; }}
-            QStatusBar {{ background-color: #1e293b; color: #94a3b8; border-top: 1px solid #334155; padding: 4px; }}
+            QStatusBar {{
+                background-color: #1e293b; color: #94a3b8; border-top: 1px solid #334155;
+                padding: 4px;
+            }}
             QStatusBar::item {{ border: none; }}
             """
         )
@@ -495,180 +593,269 @@ class MainWindow(QMainWindow):
         data = self.lang_combo.currentData()
         if data in ("fa", "en"):
             self.lang = data  # type: ignore[assignment]
-            self._apply_language()
             self._reload_ports()
+            self._apply_language()
 
     def _reload_ports(self) -> None:
-        current = self.port_combo.currentText() if self.port_combo.count() else "Auto"
+        current = self.port_combo.currentData() if self.port_combo.count() else AUTO_PORT
         self.port_combo.clear()
-        for port in self.service.list_ports():
-            label = COPY[self.lang]["auto"] if port == "Auto" else port
-            self.port_combo.addItem(label, port)
-        idx = self.port_combo.findData(current if current != COPY[self.lang]["auto"] else "Auto")
-        if idx >= 0:
-            self.port_combo.setCurrentIndex(idx)
+        self.port_combo.addItem(COPY[self.lang]["auto"], AUTO_PORT)
+        for port in self._backend.list_serial_ports():
+            self.port_combo.addItem(port, port)
+        index = self.port_combo.findData(current)
+        self.port_combo.setCurrentIndex(max(0, index))
 
     def _refresh_ports(self) -> None:
-        prev_count = self.port_combo.count()
+        previous = self.port_combo.count()
         self._reload_ports()
-        new_count = self.port_combo.count()
-        self._append_log("msg.port_scan", prev_count, new_count)
+        self._append_log("msg.port_scan", previous, self.port_combo.count())
 
     def _update_status_pill(self) -> None:
         t = COPY[self.lang]
-        if self.service.connected:
-            text = t["sim"] if self.service.simulation else t["connected"]
-            self.status_pill.setStyleSheet(
-                "background:#6366f1; color:#ffffff; border-radius:12px; padding:6px 16px; font-weight:bold;"
-            )
+        if self.connected and self._session is not None:
+            text = t["sim"] if self._session.simulated else t["connected"]
+            self.status_pill.setStyleSheet(_PILL_STYLE_ACTIVE)
         else:
             text = t["idle"]
-            self.status_pill.setStyleSheet(
-                "background:#1e293b; color:#94a3b8; border-radius:12px; padding:6px 16px; font-weight:bold; border:1px solid #334155;"
-            )
+            self.status_pill.setStyleSheet(_PILL_STYLE_IDLE)
         self.status_pill.setText(text)
 
     # ----------------------------------------------------------- connection
     def _toggle_connect(self) -> None:
-        if self.service.connected:
-            self.service.disconnect()
-            self.timer.stop()
-            self.spark.clear()
-            self._zero_gauges()
-            if self.recorder.recording:
-                self._toggle_recording()
-            self.record_btn.setEnabled(False)
-            self.connect_btn.setText(COPY[self.lang]["connect"])
-            self.port_combo.setEnabled(True)
-            self.refresh_ports_btn.setEnabled(True)
-            self.mode_combo.setEnabled(True)
-            self._update_status_pill()
+        if self.connected:
+            self._disconnect()
             return
 
-        port = self.port_combo.currentData() or "Auto"
+        t = COPY[self.lang]
+        port_data = self.port_combo.currentData()
+        port = None if port_data in (None, AUTO_PORT) else str(port_data)
         simulation = self.mode_combo.currentData() == "sim"
-        ok = self.service.connect(port=str(port), simulation=simulation)
-        if not ok:
-            QMessageBox.warning(self, COPY[self.lang]["title"], COPY[self.lang]["connection_failed"])
+
+        try:
+            session = self._backend.create_session(simulation=simulation, port=port)
+        except IranObdTunerError as exc:
+            self._append_log("msg.adapter_unavailable", exc)
+            QMessageBox.warning(self, t["title"], t["adapter_unavailable"].format(exc))
+            return
+        try:
+            session.connect()
+        except IranObdTunerError as exc:
+            self._append_log("msg.connect_error", exc)
+            QMessageBox.warning(self, t["title"], t["connection_failed"].format(exc))
             return
 
-        self.connect_btn.setText(COPY[self.lang]["disconnect"])
+        self._session = session
+        info = session.adapter_info
+        self._append_log("msg.connected", info.name, info.protocols[0] if info.protocols else "?")
+        self.connect_btn.setText(t["disconnect"])
         self.port_combo.setEnabled(False)
         self.refresh_ports_btn.setEnabled(False)
-        self.record_btn.setEnabled(True)
         self.mode_combo.setEnabled(False)
+        self.record_btn.setEnabled(True)
+        self.sim_banner.setVisible(session.simulated)
         self._update_status_pill()
         self._refresh_dtc()
-        self.timer.start()
+        self._tick()
+        if self.connected:
+            self.timer.start()
 
-    def _zero_gauges(self) -> None:
-        for g in self.gauges.values():
-            g.set_value(0)
+    def _disconnect(self) -> None:
+        self.timer.stop()
+        if self.recorder.recording:
+            self._stop_recording()
+        was_connected = self._session is not None
+        if self._session is not None:
+            self._session.disconnect()
+        self._session = None
+        self._last_snapshot = None
+        self._dtc_state = None
+        self._ident_state = None
+        self.spark.clear()
+        t = COPY[self.lang]
+        self.connect_btn.setText(t["connect"])
+        self.port_combo.setEnabled(True)
+        self.refresh_ports_btn.setEnabled(True)
+        self.mode_combo.setEnabled(True)
+        self.record_btn.setEnabled(False)
+        self.sim_banner.setVisible(False)
+        self._update_status_pill()
+        self._render_snapshot()
+        self._render_dtc()
+        self._render_identification()
+        if was_connected:
+            self._append_log("msg.disconnected")
 
     def _tick(self) -> None:
-        sample = self.service.read_live()
-        self._apply_sample(sample)
-        if self.recorder.recording:
-            self.recorder.write(sample)
-            self.recording_label.setText(f"⏺ {self.recorder.count} samples")
-        else:
-            self.recording_label.setText("")
-
-    def _apply_sample(self, s: LiveSample) -> None:
-        self.gauges["rpm"].set_value(s.rpm)
-        self.gauges["speed"].set_value(s.speed)
-        self.gauges["coolant"].set_value(s.coolant)
-        self.gauges["voltage"].set_value(s.voltage)
-        self.gauges["fuel"].set_value(s.fuel)
-        self.gauges["throttle"].set_value(s.throttle)
-        self.gauges["iat"].set_value(s.iat)
-        self.gauges["load"].set_value(s.load)
-        self.spark.push(s.rpm, s.speed)
-
-    def _refresh_dtc(self) -> None:
-        self.dtc_list.clear()
-        items = self.service.read_dtc()
-        t = COPY[self.lang]
-        if not items:
-            self.dtc_list.addItem(t["no_dtc"])
+        if self._session is None or not self._session.is_connected:
             return
-        for item in items:
-            text = f"{item.code}  —  {item.description}"
-            self.dtc_list.addItem(QListWidgetItem(text))
+        try:
+            snapshot = self._session.poll(DASHBOARD_PIDS)
+        except IranObdTunerError as exc:
+            self._append_log("msg.connection_lost", exc)
+            self._disconnect()
+            return
+        self._last_snapshot = snapshot
+        self._render_snapshot()
+        self.spark.push(snapshot.value_for("010C"), snapshot.value_for("010D"))
+        if self.recorder.recording:
+            self.recorder.write(snapshot)
+        self._update_recording_label()
+
+    def _render_snapshot(self) -> None:
+        t = COPY[self.lang]
+        snapshot = self._last_snapshot
+        for spec in GAUGES:
+            card = self.gauges[spec.key]
+            reading = None if snapshot is None else snapshot.reading_for(spec.pid)
+            if reading is None:
+                card.set_unavailable("" if snapshot is None else t["pid_status"]["no_data"])
+            elif reading.measurement is not None:
+                card.set_value(reading.measurement.value)
+            else:
+                card.set_unavailable(t["pid_status"][_STATUS_KEYS[reading.status]])
+
+    # ------------------------------------------------------------ trouble codes
+    def _refresh_dtc(self) -> None:
+        if self._session is None or not self._session.is_connected:
+            self._dtc_state = None
+            self._render_dtc()
+            return
+        try:
+            codes = self._session.read_trouble_codes()
+        except IranObdTunerError as exc:
+            self._dtc_state = str(exc)
+            self._append_log("msg.dtc_read_error", exc)
+        else:
+            self._dtc_state = codes
+            self._append_log("msg.dtc_read", len(codes))
+        self._render_dtc()
+
+    def _render_dtc(self) -> None:
+        t = COPY[self.lang]
+        self.dtc_list.clear()
+        state = self._dtc_state
+        if state is None:
+            self.dtc_list.addItem(t["dtc_not_connected"])
+        elif isinstance(state, str):
+            self.dtc_list.addItem(t["dtc_read_failed"].format(state))
+        elif not state:
+            self.dtc_list.addItem(t["no_dtc"])
+        else:
+            for code in state:
+                description = code.description or t["dtc_unknown_description"]
+                self.dtc_list.addItem(f"{code.code}  —  {description}")
 
     def _clear_dtc(self) -> None:
-        try:
-            cleared = self.service.clear_dtc()
-        except SafetyGuardError:
-            self._append_log("msg.safety_violation")
-            modal = SafetyModal(self.lang, self)
-            modal.exec()
-            return
-        if cleared:
-            self._refresh_dtc()
+        """Forward the request to the adapter's safety gate and explain the refusal."""
+        if self._session is not None and self._session.is_connected:
+            try:
+                self._session.request_clear_trouble_codes()
+            except (SafetyGuardError, UnsupportedOperationError) as exc:
+                _LOG.info("clear trouble codes refused: %s", exc)
+        self._append_log("msg.clear_dtc_refused")
+        self._show_safety_modal(COPY[self.lang]["safety_clear_dtc_msg"])
 
+    def _show_safety_modal(self, message: str) -> None:
+        if self._safety_modal is not None:
+            self._safety_modal.close()
+        self._safety_modal = SafetyModal(self.lang, message, self)
+        self._safety_modal.open()
+
+    # ------------------------------------------------------------ identification
+    def _read_identification(self) -> None:
+        if self._session is None or not self._session.is_connected:
+            self._ident_state = ("ident_not_connected", "")
+            self._render_identification()
+            return
+        try:
+            info = self._session.read_vehicle_info()
+        except IranObdTunerError as exc:
+            self._ident_state = ("ident_failed", str(exc))
+            self._append_log("msg.ident_error", exc)
+        else:
+            self._ident_state = info
+            self._append_log("msg.ident_read", info.vin or "-")
+        self._render_identification()
+
+    def _render_identification(self) -> None:
+        t = COPY[self.lang]
+        state = self._ident_state
+        if state is None:
+            self.ident_result_label.setVisible(False)
+            return
+        if isinstance(state, tuple):
+            key, detail = state
+            text = html.escape(t[key].format(detail))
+        else:
+            unknown = t["ident_unknown"]
+            source = (
+                f"<span style='color: #fbbf24;'>{html.escape(t['ident_simulated'])}</span>"
+                if state.simulated
+                else html.escape(t["ident_real"])
+            )
+            text = (
+                f"<b>{html.escape(t['ident_vin'])}</b> "
+                f"<code>{html.escape(state.vin or unknown)}</code><br><br>"
+                f"<b>{html.escape(t['ident_protocol'])}</b> "
+                f"{html.escape(state.protocol or unknown)}<br><br>"
+                f"<b>{html.escape(t['ident_adapter'])}</b> "
+                f"{html.escape(state.adapter_name or unknown)}<br><br>"
+                f"{source}"
+            )
+        self.ident_result_label.setText(text)
+        self.ident_result_label.setVisible(True)
+
+    # ------------------------------------------------------------ recording
     def _toggle_recording(self) -> None:
         if self.recorder.recording:
-            path = self.recorder.stop()
-            count = self.recorder.count
-            self.record_btn.setText("⏺")
-            self.record_btn.setStyleSheet("")
-            self._append_log("msg.recording_stopped", count, str(path))
-        else:
-            default_name = f"live_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            file_path_str, _ = QFileDialog.getSaveFileName(
-                self, "Save Live Data / ذخیره داده‌ها", default_name, "CSV Files (*.csv)"
-            )
-            if not file_path_str:
-                return
-                
-            custom_path = Path(file_path_str)
-            path = self.recorder.start(custom_path)
-            
-            self.record_btn.setText("⏹")
-            self.record_btn.setStyleSheet(
-                "background-color: #ef4444; color: #ffffff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: bold;"
-            )
-            self._append_log("msg.recording_started", str(path))
-
-    def _identify_ecu(self) -> None:
-        identifier = MockEcuIdentifier()
-        result = identifier.identify()
-        self._append_log("msg.ecu_identified", result.ecu_family)
-        
+            self._stop_recording()
+            return
+        if self._session is None:
+            return
         t = COPY[self.lang]
-        html = (
-            f"<b>{t['ecu_id_vin']}</b> <code style='color: #38bdf8;'>{result.vin}</code><br><br>"
-            f"<b>{t['ecu_id_family']}</b> <code style='color: #f59e0b;'>{result.ecu_family}</code><br><br>"
-            f"<b>{t['ecu_id_status']}</b> {result.status}<br><br>"
-            f"<span style='color: #ef4444;'>{t['ecu_id_simulated']}</span>"
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        suffix = "_simulated" if self._session.simulated else ""
+        default_path = self._backend.output_dir / f"live_{stamp}{suffix}.csv"
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, t["save_dialog_title"], str(default_path), t["save_dialog_filter"]
         )
-        self.ecu_result_label.setText(html)
-        self.ecu_result_frame.setVisible(True)
+        if not chosen:
+            return
+        try:
+            path = self.recorder.start(Path(chosen), DASHBOARD_PIDS)
+        except OSError as exc:
+            self._append_log("msg.recording_error", exc)
+            QMessageBox.warning(self, t["title"], t["recording_failed"].format(exc))
+            return
+        self.record_btn.setText("⏹")
+        self.record_btn.setStyleSheet(_RECORD_STYLE_ACTIVE)
+        self.record_btn.setToolTip(t["record_stop"])
+        self._append_log("msg.recording_started", path)
+        self._update_recording_label()
 
-    def _translate_log(self, message: str, args: tuple) -> str:
-        t = COPY[self.lang]
-        messages = t.get("messages", {})
-        if message in messages:
-            template = messages[message]
-            try:
-                return template.format(*args) if args else template
-            except (IndexError, KeyError):
-                return template
-        if args:
-            try:
-                return message.format(*args)
-            except (IndexError, KeyError):
-                return message
-        return message
+    def _stop_recording(self) -> None:
+        count = self.recorder.count
+        path = self.recorder.stop()
+        self.record_btn.setText("⏺")
+        self.record_btn.setStyleSheet("")
+        self.record_btn.setToolTip(COPY[self.lang]["record_start"])
+        self._append_log("msg.recording_stopped", count, path)
+        self._update_recording_label()
 
-    def _append_log(self, message: str, *args: object) -> None:
-        text = self._translate_log(message, args)
+    def _update_recording_label(self) -> None:
+        if self.recorder.recording:
+            text = COPY[self.lang]["recording_samples"].format(self.recorder.count)
+        else:
+            text = ""
+        self.recording_label.setText(text)
+
+    # ------------------------------------------------------------ log
+    def _append_log(self, key: str, *args: object) -> None:
+        text = format_message(self.lang, key, *args)
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log_list.insertItem(0, f"{stamp}  {text}")
         self.status_bar.showMessage(text, 5000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self.timer.stop()
-        self.service.disconnect()
+        self._disconnect()
         super().closeEvent(event)

@@ -85,8 +85,13 @@ iran-obd-tuner-gui
 QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نمایشگر/CI، بدون باز کردن پنجره
 ```
 
-`scripts/check.py` همان سه گیت CI را روی هر پلتفرمی اجرا می‌کند و اگر pytest/ruff نصب نبود،
-آن مرحله را «skip» گزارش می‌دهد (به‌جای شکست).
+`scripts/check.py` همان سه گیت CI را روی هر پلتفرمی اجرا می‌کند. اگر pytest یا ruff نصب نباشد،
+آن گیت **شکست** حساب می‌شود (exit code 1)، چون گیت اجرانشده گیت پاس‌شده نیست. فقط با
+`python scripts/check.py --allow-missing` ابزار غایب به‌صورت «skipped» گزارش می‌شود.
+
+> اگر venv را از مسیر دیگری کپی یا جابه‌جا کرده‌اید، نصب editable به مسیر قدیمی اشاره می‌کند و
+> `iran-obd-tuner` با `ModuleNotFoundError` شکست می‌خورد. دوباره اجرا کنید:
+> `python -m pip install -e ".[dev,gui]"`.
 
 ## ۴. افزودن تست
 
@@ -100,8 +105,22 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
 - تست‌های وابسته به Qt در `tests/integration/` با `pytest.importorskip("PySide6")` و پلتفرم
   `offscreen` نوشته شوند (الگو: `tests/integration/test_gui_window.py`)، تا بدون نصب `[gui]`
   خودکار skip شوند و مجموعه تست هرگز به نمایشگر نیاز نداشته باشد.
-- هیچ تستی نباید پورت سریال باز کند: مسیر واقعی آداپتور با `monkeypatch` غیرفعال می‌شود
-  (الگو: `tests/unit/test_obd_service.py`).
+- هیچ تستی نباید پورت سریال باز کند. فهرست درگاه‌ها با ماژول pyserial جعلی تست می‌شود (الگو:
+  `tests/unit/test_serial_ports.py`) و تست‌های GUI یک backend با فهرست درگاه ثابت می‌سازند.
+- رفتار هر PID (پشتیبانی‌نشده / بدون پاسخ / پاسخ نامعتبر / قطع اتصال) با یک آداپتور اسکریپتی که
+  همان قرارداد `ObdAdapter` را رعایت می‌کند تست شود (الگو: `ScriptedAdapter` در
+  `tests/unit/test_live_data.py`). برای مقادیر زمان‌مند، ساعت جعلی `fake_clock` در
+  `tests/conftest.py` را به `MockObdAdapter(clock=...)` بدهید.
+- مرز لایه‌ها و کامل بودن ترجمه‌ها خودکار تست می‌شوند (`tests/unit/test_architecture.py` و
+  `tests/unit/test_i18n.py`). اگر یکی از این‌ها شکست خورد، کد را اصلاح کنید، نه قاعده را؛ مگر
+  اینکه تغییر قاعده در `docs/architecture.md` تصمیم‌گیری و مستند شده باشد.
+
+### داشبورد: مسیر داده
+
+پنجره هیچ‌وقت آداپتور نمی‌سازد. `app/dashboard.py` (`AppDashboardBackend`) حالت «شبیه‌سازی» را
+به آداپتور mock با `MockScenario.drive_cycle()` و حالت «واقعی» را به `elm327` (فعلاً پیاده‌نشده)
+وصل می‌کند و یک `diagnostics.live_data.LiveDataSession` برمی‌گرداند. رشته جدید رابط کاربری را
+در هر دو زبان در `ui/i18n.py` اضافه کنید؛ متن ثابت داخل ویجت ننویسید.
 
 ## ۵. افزودن یک قابلیت: مسیرهای متعارف
 
@@ -138,7 +157,7 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
 ## ۶. CI
 
 `.github/workflows/ci.yml` روی هر push به `main` و هر PR اجرا می‌شود: پایتون ۳٫۱۱/۳٫۱۲/۳٫۱۳،
-`s pip install -e ".[dev]"`، سپس `ruff check`، `ruff format --check` و `pytest`.
+`pip install -e ".[dev]"`، سپس `ruff check`، `ruff format --check` و `pytest`.
 extras سخت‌افزاری/گرافیکی در CI نصب **نمی‌شوند** (چون بدون سخت‌افزار واقعی قابل اعتبارسنجی
 نیستند). اگر تغییری فقط با `[obd]`/`[gui]` قابل تست است، در توضیح PR بنویسید که دستی بررسی شده.
 

@@ -15,7 +15,13 @@ from iran_obd_tuner.core.exceptions import (
 from iran_obd_tuner.core.models import Measurement, Unit
 from iran_obd_tuner.core.safety import OperationClass, SafetyPolicy
 from iran_obd_tuner.hardware.base import AdapterKind
-from iran_obd_tuner.hardware.mock import FailureMode, MockObdAdapter, MockScenario, SimulatedReading
+from iran_obd_tuner.hardware.mock import (
+    FailureMode,
+    MockObdAdapter,
+    MockScenario,
+    MotionProfile,
+    SimulatedReading,
+)
 
 
 def test_info_declares_a_simulated_adapter(adapter: MockObdAdapter) -> None:
@@ -208,3 +214,66 @@ def test_scenario_with_failure_returns_a_copy(adapter: MockObdAdapter) -> None:
     assert original.failure is FailureMode.NONE
     assert broken.failure is FailureMode.READ_TIMEOUT
     assert broken.name == original.name
+
+
+def test_mock_adapter_declares_its_data_as_simulated(adapter: MockObdAdapter) -> None:
+    assert adapter.info.simulated is True
+
+
+def test_static_scenarios_do_not_change_over_time(fake_clock) -> None:
+    adapter = MockObdAdapter(clock=fake_clock)
+    with adapter.session():
+        first = adapter.read_measurement("010C").value
+        fake_clock.advance(30.0)
+        second = adapter.read_measurement("010C").value
+
+    assert first == second == 842.0
+
+
+def test_drive_cycle_is_time_varying_and_deterministic(fake_clock) -> None:
+    adapter = MockObdAdapter(MockScenario.drive_cycle(), clock=fake_clock)
+    with adapter.session():
+        at_start = adapter.read_measurement("010C").value
+        fake_clock.advance(1.4)  # inside the first acceleration burst
+        in_burst = adapter.read_measurement("010C").value
+        speed = adapter.read_measurement("010D").value
+
+    assert at_start == pytest.approx(780.0)
+    assert in_burst > 3000.0
+    assert speed > 100.0
+
+    replay_clock = type(fake_clock)()  # a second, independent fake clock
+    replay = MockObdAdapter(MockScenario.drive_cycle(), clock=replay_clock)
+    with replay.session():
+        replay_clock.advance(1.4)
+        assert replay.read_measurement("010C").value == pytest.approx(in_burst)
+
+
+def test_drive_cycle_time_starts_at_connect(fake_clock) -> None:
+    adapter = MockObdAdapter(MockScenario.drive_cycle(), clock=fake_clock)
+    fake_clock.advance(500.0)  # time before connect does not count
+    with adapter.session():
+        assert adapter.read_measurement("011F").value == 0.0
+        fake_clock.advance(12.5)
+        assert adapter.read_measurement("011F").value == 12.0
+
+
+def test_drive_cycle_covers_the_dashboard_parameters_and_keeps_support_rules(fake_clock) -> None:
+    scenario = MockScenario.drive_cycle()
+    adapter = MockObdAdapter(scenario, clock=fake_clock)
+
+    assert {"010C", "010D", "0105", "0142", "012F", "0111", "010F", "0104"} <= set(
+        scenario.supported_pids
+    )
+    with adapter.session(), pytest.raises(UnsupportedPidError):
+        adapter.read_measurement("015C")  # not part of the scenario
+
+
+def test_motion_profile_round_trips_through_dict() -> None:
+    scenario = MockScenario.drive_cycle()
+    restored = MockScenario.from_dict(scenario.as_dict())
+
+    assert restored.motion is MotionProfile.DRIVE_CYCLE
+    assert restored == scenario
+    with pytest.raises(ValueError):
+        MockScenario.from_dict({"motion": "teleport"})
