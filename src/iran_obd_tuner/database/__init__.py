@@ -8,6 +8,11 @@ JSON backed trouble code catalogue — behind the abstract
 (SQLite, or files parsed from A2L/DAMOS descriptions) can replace it later without touching
 the diagnostic layer.
 
+The vehicle and ECU knowledge base (Milestone 5) lives next to it: provenance-backed JSON
+packs in ``data/vehicles/`` (one per manufacturer), validated by ``vehicle_schema.py`` and
+served read-only by :class:`~iran_obd_tuner.database.vehicles.JsonVehicleKnowledgeBase`.
+Every claim carries a confidence level and a source; nothing here writes a file.
+
 Import rules for this package:
 
 * may import ``core`` and the standard library,

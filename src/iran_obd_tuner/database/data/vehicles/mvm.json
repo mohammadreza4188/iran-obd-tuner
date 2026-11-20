@@ -1,0 +1,184 @@
+{
+  "schema": "iran-obd-tuner/vehicle-pack",
+  "schema_version": 1,
+  "manufacturer": {
+    "id": "mvm",
+    "names": {
+      "en": "Modiran Vehicle Manufacturing (MVM)",
+      "fa": "مدیران خودرو (ام‌وی‌ام)"
+    },
+    "wmi": [],
+    "notes": "No authoritative WMI register was consulted yet; WMI prefixes are left unknown rather than taken from memory. MVM assembles Chery-based models in Iran."
+  },
+  "sources": [
+    {
+      "id": "src.bama_mvm_315_hatchback",
+      "kind": "public_reference",
+      "title": "MVM 315 hatchback (basic trim) technical specifications",
+      "publisher": "bama.ir",
+      "url": "https://bama.ir/car-reviews/mvm/315hatchback-specs-1197-389-basic",
+      "accessed": "2026-11-21",
+      "notes": "Persian trim listing: 1.5 L four-cylinder engine, 5-speed manual. No engine code is given and other trims may differ. Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "mvm.315",
+      "names": {
+        "en": "MVM 315",
+        "fa": "ام‌وی‌ام ۳۱۵"
+      },
+      "variants": [
+        {
+          "id": "default",
+          "names": {
+            "en": "MVM 315 (1.5 L)",
+            "fa": "ام‌وی‌ام ۳۱۵ (۱٫۵ لیتری)"
+          },
+          "engine": {
+            "value": "1.5 L inline-4 (code not stated)",
+            "confidence": "reported",
+            "source": "src.bama_mvm_315_hatchback",
+            "notes": "Hatchback basic trim only."
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "mvm.x22",
+      "names": {
+        "en": "MVM X22",
+        "fa": "ام‌وی‌ام X22"
+      },
+      "variants": [
+        {
+          "id": "default",
+          "names": {
+            "en": "MVM X22 (engine not established)",
+            "fa": "ام‌وی‌ام X22 (موتور نامشخص)"
+          },
+          "engine": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.engine_plate",
+            "notes": "No citable source for the engine of the original X22 was found; the later X22 Pro is a different variant."
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    }
+  ]
+}

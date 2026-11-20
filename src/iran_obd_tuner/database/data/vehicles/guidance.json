@@ -1,0 +1,42 @@
+{
+  "schema": "iran-obd-tuner/vehicle-guidance",
+  "schema_version": 1,
+  "guidance": {
+    "verify.obd_protocol_atdpn": {
+      "en": "Connect a read-only ELM327 adapter (ignition on, engine off) and run 'iran-obd-tuner diagnose --adapter elm327 --port <PORT>'. The protocol the adapter reports (AT DPN) answers K-Line vs CAN and the CAN bitrate. Then export a Field Evidence Bundle from the dashboard.",
+      "fa": "یک آداپتور ELM327 فقط‌خواندنی وصل کنید (سوئیچ باز، موتور خاموش) و دستور 'iran-obd-tuner diagnose --adapter elm327 --port <PORT>' را اجرا کنید. پروتکلی که آداپتور گزارش می‌کند (AT DPN) نوع K-Line یا CAN و سرعت CAN را مشخص می‌کند. سپس از داشبورد یک بسته شواهد میدانی خروجی بگیرید."
+    },
+    "verify.supported_pids": {
+      "en": "Run a read-only diagnosis with a real adapter: the report lists the service 01 PIDs the vehicle declares (0100/0120/0140 bitmasks). Export a Field Evidence Bundle.",
+      "fa": "یک تشخیص فقط‌خواندنی با آداپتور واقعی اجرا کنید؛ گزارش، PIDهای سرویس ۰۱ را که خودرو اعلام می‌کند (بیت‌ماسک‌های 0100/0120/0140) فهرست می‌کند. بسته شواهد میدانی خروجی بگیرید."
+    },
+    "verify.uds_ident": {
+      "en": "Only if the OBD port is CAN: run 'iran-obd-tuner uds-ident --interface <IF> --channel <CH>' (read-only DIDs F187/F189/F191/F197) and export a Field Evidence Bundle. An ECU on K-Line will not answer UDS over CAN.",
+      "fa": "فقط اگر درگاه OBD از نوع CAN است: دستور 'iran-obd-tuner uds-ident --interface <IF> --channel <CH>' را اجرا کنید (خواندن DIDهای F187/F189/F191/F197) و بسته شواهد میدانی خروجی بگیرید. ECU روی K-Line به UDS روی CAN پاسخ نمی‌دهد."
+    },
+    "verify.uds_discover": {
+      "en": "On CAN only: 'iran-obd-tuner uds-ident --discover' lists the response IDs that answer a functional TesterPresent. The physical request/response pair counts only after a successful identification read with it.",
+      "fa": "فقط روی CAN: دستور 'iran-obd-tuner uds-ident --discover' شناسه‌های پاسخی را که به TesterPresent عمومی جواب می‌دهند فهرست می‌کند. جفت شناسه درخواست/پاسخ فقط پس از یک خواندن شناسایی موفق با همان جفت معتبر است."
+    },
+    "verify.ecu_label": {
+      "en": "Read the supplier and part number printed on the ECU housing label (ignition off; do not open the ECU). Record the label text and a photo in the evidence notes and cross-check with DIDs F187/F191 when they can be read.",
+      "fa": "سازنده و شماره قطعه چاپ‌شده روی برچسب بدنه ECU را بخوانید (سوئیچ بسته؛ ECU را باز نکنید). متن برچسب و عکس آن را در یادداشت شواهد ثبت کنید و در صورت امکان با DIDهای F187/F191 مقایسه کنید."
+    },
+    "verify.engine_plate": {
+      "en": "Check the engine code in the vehicle documents (registration card) or on the engine block stamp.",
+      "fa": "کد موتور را در مدارک خودرو (کارت خودرو) یا روی حک بدنه موتور بررسی کنید."
+    },
+    "verify.vin_wmi": {
+      "en": "The first three VIN characters are the WMI. Confirm the WMI of this manufacturer against an authoritative WMI register before recording it.",
+      "fa": "سه نویسه اول VIN همان WMI است. پیش از ثبت، WMI این سازنده را با یک مرجع رسمی WMI تطبیق دهید."
+    },
+    "verify.model_years": {
+      "en": "Confirm the production years from a manufacturer publication.",
+      "fa": "سال‌های تولید را از یک منبع رسمی سازنده تأیید کنید."
+    },
+    "verify.manufacturer_pids": {
+      "en": "Manufacturer-specific identifiers need service literature or traffic recorded from a factory tool. This project never sends them.",
+      "fa": "شناسه‌های اختصاصی سازنده به مستندات سرویس یا ترافیک ضبط‌شده از ابزار کارخانه نیاز دارند. این پروژه هرگز آن‌ها را ارسال نمی‌کند."
+    }
+  }
+}

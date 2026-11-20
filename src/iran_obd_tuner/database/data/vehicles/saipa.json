@@ -1,0 +1,357 @@
+{
+  "schema": "iran-obd-tuner/vehicle-pack",
+  "schema_version": 1,
+  "manufacturer": {
+    "id": "saipa",
+    "names": {
+      "en": "SAIPA",
+      "fa": "سایپا"
+    },
+    "wmi": [],
+    "notes": "No authoritative WMI register was consulted yet; WMI prefixes are left unknown rather than taken from memory."
+  },
+  "sources": [
+    {
+      "id": "src.wikipedia_saipa_tiba",
+      "kind": "public_reference",
+      "title": "Saipa Tiba",
+      "publisher": "Wikipedia (English)",
+      "url": "https://en.wikipedia.org/wiki/Saipa_Tiba",
+      "accessed": "2026-11-21",
+      "notes": "Lists a 1.5 L Saipa M15 inline-four petrol engine; based on the Kia Pride. Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    },
+    {
+      "id": "src.wikipedia_saipa_saina",
+      "kind": "public_reference",
+      "title": "Saipa Saina",
+      "publisher": "Wikipedia (English)",
+      "url": "https://en.wikipedia.org/wiki/Saipa_Saina",
+      "accessed": "2026-11-21",
+      "notes": "Facelifted Tiba; lists the 1.5 L M15 (Kia Pride derived). Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    },
+    {
+      "id": "src.wikipedia_saipa_quik",
+      "kind": "public_reference",
+      "title": "Saipa Quik",
+      "publisher": "Wikipedia (English)",
+      "url": "https://en.wikipedia.org/wiki/Saipa_Quik",
+      "accessed": "2026-11-21",
+      "notes": "Hatchback version of the Saina; lists the 1503 cc M15. Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "saipa.pride",
+      "names": {
+        "en": "Saipa Pride",
+        "fa": "پراید"
+      },
+      "variants": [
+        {
+          "id": "default",
+          "names": {
+            "en": "Pride (engine not established)",
+            "fa": "پراید (موتور نامشخص)"
+          },
+          "engine": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.engine_plate",
+            "notes": "The Pride is the licence-built Kia Pride with a 1.3 L engine, but no citable source gives the designation used on Saipa production (the name 'M13' is unconfirmed)."
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "saipa.tiba",
+      "names": {
+        "en": "Saipa Tiba",
+        "fa": "تیبا"
+      },
+      "variants": [
+        {
+          "id": "m15",
+          "names": {
+            "en": "Tiba M15",
+            "fa": "تیبا M15"
+          },
+          "engine": {
+            "value": "M15",
+            "confidence": "reported",
+            "source": "src.wikipedia_saipa_tiba"
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "saipa.saina",
+      "names": {
+        "en": "Saipa Saina",
+        "fa": "ساینا"
+      },
+      "variants": [
+        {
+          "id": "m15",
+          "names": {
+            "en": "Saina M15",
+            "fa": "ساینا M15"
+          },
+          "engine": {
+            "value": "M15",
+            "confidence": "reported",
+            "source": "src.wikipedia_saipa_saina"
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "saipa.quick",
+      "names": {
+        "en": "Saipa Quick",
+        "fa": "کوییک"
+      },
+      "variants": [
+        {
+          "id": "m15",
+          "names": {
+            "en": "Quick M15",
+            "fa": "کوییک M15"
+          },
+          "engine": {
+            "value": "M15",
+            "confidence": "reported",
+            "source": "src.wikipedia_saipa_quik"
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    }
+  ]
+}

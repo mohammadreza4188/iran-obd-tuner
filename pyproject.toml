@@ -70,7 +70,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-"iran_obd_tuner.database" = ["data/*.json"]
+"iran_obd_tuner.database" = ["data/*.json", "data/vehicles/*.json"]
 
 [tool.setuptools.dynamic]
 version = { attr = "iran_obd_tuner.__version__" }

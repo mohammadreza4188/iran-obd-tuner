@@ -1,0 +1,123 @@
+{
+  "schema": "iran-obd-tuner/vehicle-pack",
+  "schema_version": 1,
+  "manufacturer": {
+    "id": "fixturemotors",
+    "names": {"en": "Fixture Motors (test data)", "fa": "خودروساز آزمایشی"},
+    "wmi": [
+      {"value": "ZFX", "confidence": "reported", "source": "src.fixture_reference"}
+    ],
+    "notes": "Fictional manufacturer used only by the automated tests. Nothing here describes a real vehicle."
+  },
+  "sources": [
+    {
+      "id": "src.fixture_reference",
+      "kind": "public_reference",
+      "title": "Fixture public reference",
+      "url": "https://example.com/fixture-reference",
+      "accessed": "2026-01-01"
+    },
+    {
+      "id": "src.fixture_forum",
+      "kind": "community_report",
+      "title": "Fixture forum thread",
+      "url": "https://example.com/fixture-forum",
+      "accessed": "2026-01-01"
+    },
+    {
+      "id": "src.fixture_manual",
+      "kind": "manufacturer_publication",
+      "title": "Fixture service manual, edition 1"
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "fixturemotors.alpha",
+      "names": {"en": "Fixture Alpha", "fa": "آلفای آزمایشی"},
+      "variants": [
+        {
+          "id": "can",
+          "names": {"en": "Alpha CAN", "fa": "آلفا CAN"},
+          "engine": {"value": "FX16", "confidence": "reported", "source": "src.fixture_reference"},
+          "model_years": {"value": {"first": 2015, "last": 2020}, "confidence": "documented", "source": "src.fixture_manual"},
+          "obd_physical_layer": {"value": "iso_15765_4_can_11_500", "confidence": "documented", "source": "src.fixture_manual"},
+          "can_bitrate_bps": {"value": 500000, "confidence": "documented", "source": "src.fixture_manual"},
+          "supported_pids": [
+            {"value": "010C", "confidence": "reported", "source": "src.fixture_reference"},
+            {"value": "010D", "confidence": "reported", "source": "src.fixture_reference"},
+            {"value": "0105", "confidence": "reported", "source": "src.fixture_reference"}
+          ],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [
+                {"value": "FixtureECU 1", "confidence": "unverified", "source": "src.fixture_forum", "verify": "verify.ecu_label"}
+              ],
+              "supplier": {"value": "Fixture Electronics", "confidence": "reported", "source": "src.fixture_reference"},
+              "diagnostic_protocol": {"value": "uds_iso14229", "confidence": "documented", "source": "src.fixture_manual"},
+              "request_id": {"value": "7E0", "confidence": "documented", "source": "src.fixture_manual"},
+              "response_id": {"value": "7E8", "confidence": "documented", "source": "src.fixture_manual"},
+              "id_bits": {"value": 11, "confidence": "documented", "source": "src.fixture_manual"},
+              "part_number_patterns": [
+                {"value": "SIM-PART-*", "confidence": "reported", "source": "src.fixture_reference"}
+              ],
+              "software_version_patterns": [
+                {"value": "SIM-SW-1.*", "confidence": "unverified", "source": "src.fixture_forum", "verify": "verify.uds_ident"}
+              ],
+              "system_name_patterns": [
+                {"value": "SIMULATED ECU", "confidence": "reported", "source": "src.fixture_reference"}
+              ],
+              "dids": [
+                {"value": {"did": "F190", "name": "vin"}, "confidence": "documented", "source": "src.fixture_manual"}
+              ],
+              "manufacturer_pids": [
+                {"value": {"service": "22", "identifier": "1234", "name": "fixture value"}, "confidence": "unverified", "source": "src.fixture_forum", "verify": "verify.manufacturer_pids"}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "kline",
+          "names": {"en": "Alpha K-Line", "fa": "آلفا K-Line"},
+          "engine": {"value": "FX13", "confidence": "reported", "source": "src.fixture_reference"},
+          "model_years": {"value": null, "confidence": "unknown", "verify": "verify.model_years"},
+          "obd_physical_layer": {"value": "k_line", "confidence": "reported", "source": "src.fixture_reference"},
+          "can_bitrate_bps": {"value": null, "confidence": "unknown", "verify": "verify.obd_protocol_atdpn"},
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {"value": null, "confidence": "unknown", "verify": "verify.ecu_label"},
+              "diagnostic_protocol": {"value": null, "confidence": "unknown", "verify": "verify.uds_ident"},
+              "request_id": {"value": null, "confidence": "unknown", "verify": "verify.uds_discover"},
+              "response_id": {"value": null, "confidence": "unknown", "verify": "verify.uds_discover"},
+              "id_bits": {"value": null, "confidence": "unknown", "verify": "verify.uds_discover"},
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fixturemotors.beta",
+      "names": {"en": "Fixture Beta", "fa": "بتای آزمایشی"},
+      "variants": [
+        {
+          "id": "default",
+          "names": {"en": "Beta", "fa": "بتا"},
+          "engine": {"value": "FX20", "confidence": "reported", "source": "src.fixture_reference"},
+          "model_years": {"value": null, "confidence": "unknown", "verify": "verify.model_years"},
+          "obd_physical_layer": {"value": "iso_15765_4_can_29_500", "confidence": "reported", "source": "src.fixture_reference"},
+          "can_bitrate_bps": {"value": null, "confidence": "unknown", "verify": "verify.obd_protocol_atdpn"},
+          "supported_pids": [],
+          "ecus": []
+        }
+      ]
+    }
+  ]
+}

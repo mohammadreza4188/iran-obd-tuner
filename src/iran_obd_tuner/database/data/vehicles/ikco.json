@@ -1,0 +1,511 @@
+{
+  "schema": "iran-obd-tuner/vehicle-pack",
+  "schema_version": 1,
+  "manufacturer": {
+    "id": "ikco",
+    "names": {
+      "en": "Iran Khodro (IKCO)",
+      "fa": "ایران‌خودرو"
+    },
+    "wmi": [],
+    "notes": "No authoritative WMI register was consulted yet; WMI prefixes are left unknown rather than taken from memory."
+  },
+  "sources": [
+    {
+      "id": "src.wikipedia_peugeot_pars",
+      "kind": "public_reference",
+      "title": "Peugeot Pars",
+      "publisher": "Wikipedia (English)",
+      "url": "https://en.wikipedia.org/wiki/Peugeot_Pars",
+      "accessed": "2026-11-21",
+      "notes": "Says the Pars was introduced in 2000 with the 1.8 L 8-valve XU7JP/L3, that TU5JP4 (1.6 L 16-valve, 'TU5' in Iran) variants exist, and that the base model moved to the XU7P in 2022. Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    },
+    {
+      "id": "src.khodro45_206_type2_type5",
+      "kind": "public_reference",
+      "title": "Peugeot 206 Type 2 vs Type 5",
+      "publisher": "khodro45.com",
+      "url": "https://khodro45.com/mag/peugeot-206-type2-vs-type5/",
+      "accessed": "2026-11-21",
+      "notes": "Persian article: Type 2 uses the 1.4 L 8-valve TU3, Type 5 the 1.6 L 16-valve TU5. Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    },
+    {
+      "id": "src.wikipedia_ikco_ef_engines",
+      "kind": "public_reference",
+      "title": "IKCO EF engines",
+      "publisher": "Wikipedia (English)",
+      "url": "https://en.wikipedia.org/wiki/IKCO_EF_engines",
+      "accessed": "2026-11-21",
+      "notes": "Describes the EF7 (16-valve DOHC, petrol/CNG) and its use in IKCO cars including the Samand. Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    },
+    {
+      "id": "src.wikipedia_ikco_dena",
+      "kind": "public_reference",
+      "title": "IKCO Dena",
+      "publisher": "Wikipedia (English)",
+      "url": "https://en.wikipedia.org/wiki/IKCO_Dena",
+      "accessed": "2026-11-21",
+      "notes": "Lists EF7, EF7-TC and TU5JP4 engine versions for the Dena (built on the Samand platform). Read through a web search summary on 2026-11-21; re-read the page itself before raising the confidence of anything that cites it."
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "ikco.peugeot_pars",
+      "names": {
+        "en": "Peugeot Pars",
+        "fa": "پژو پارس"
+      },
+      "variants": [
+        {
+          "id": "tu5",
+          "names": {
+            "en": "Pars TU5",
+            "fa": "پارس TU5"
+          },
+          "engine": {
+            "value": "TU5JP4",
+            "confidence": "reported",
+            "source": "src.wikipedia_peugeot_pars"
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties a specific ECU family (for example Bosch ME7.4.x, Sagem S2000 or Siemens SIM2K) to the Pars TU5. Do not assume a generic PSA ECU or the OBD default 0x7E0/0x7E8 pair applies; the project's first target vehicle (model year ~1400) needs field evidence."
+            }
+          ],
+          "notes": null
+        },
+        {
+          "id": "xu7",
+          "names": {
+            "en": "Pars XU7",
+            "fa": "پارس XU7"
+          },
+          "engine": {
+            "value": "XU7JP/L3",
+            "confidence": "reported",
+            "source": "src.wikipedia_peugeot_pars",
+            "notes": "The same source says the base model moved to the XU7P in 2022 and that the Pars 16V / ELX used a 16-valve XU7 (L4); which of these a given car has must be checked."
+          },
+          "model_years": {
+            "value": {
+              "first": 2000,
+              "last": null
+            },
+            "confidence": "reported",
+            "source": "src.wikipedia_peugeot_pars",
+            "notes": "Introduction year of the Pars with the XU7JP/L3."
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "ikco.peugeot_206",
+      "names": {
+        "en": "Peugeot 206",
+        "fa": "پژو ۲۰۶"
+      },
+      "variants": [
+        {
+          "id": "type2",
+          "names": {
+            "en": "206 Type 2",
+            "fa": "۲۰۶ تیپ ۲"
+          },
+          "engine": {
+            "value": "TU3",
+            "confidence": "reported",
+            "source": "src.khodro45_206_type2_type5",
+            "notes": "1.4 L, 8 valves."
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        },
+        {
+          "id": "type5",
+          "names": {
+            "en": "206 Type 5",
+            "fa": "۲۰۶ تیپ ۵"
+          },
+          "engine": {
+            "value": "TU5",
+            "confidence": "reported",
+            "source": "src.khodro45_206_type2_type5",
+            "notes": "1.6 L, 16 valves."
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "ikco.samand",
+      "names": {
+        "en": "IKCO Samand",
+        "fa": "سمند"
+      },
+      "variants": [
+        {
+          "id": "ef7",
+          "names": {
+            "en": "Samand EF7",
+            "fa": "سمند EF7"
+          },
+          "engine": {
+            "value": "EF7",
+            "confidence": "reported",
+            "source": "src.wikipedia_ikco_ef_engines"
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    },
+    {
+      "id": "ikco.dena",
+      "names": {
+        "en": "IKCO Dena",
+        "fa": "دنا"
+      },
+      "variants": [
+        {
+          "id": "ef7",
+          "names": {
+            "en": "Dena EF7",
+            "fa": "دنا EF7"
+          },
+          "engine": {
+            "value": "EF7",
+            "confidence": "reported",
+            "source": "src.wikipedia_ikco_dena",
+            "notes": "The same source lists EF7-TC (turbo) and TU5JP4 versions too; this entry is the naturally aspirated EF7 only."
+          },
+          "model_years": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.model_years"
+          },
+          "obd_physical_layer": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Whether the OBD port uses K-Line (ISO 9141-2 / ISO 14230-4) or CAN (ISO 15765-4) is not established for any model year by a source this project can cite."
+          },
+          "can_bitrate_bps": {
+            "value": null,
+            "confidence": "unknown",
+            "verify": "verify.obd_protocol_atdpn",
+            "notes": "Only meaningful if the OBD port turns out to be CAN."
+          },
+          "supported_pids": [],
+          "ecus": [
+            {
+              "role": "engine",
+              "family_candidates": [],
+              "supplier": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.ecu_label"
+              },
+              "diagnostic_protocol": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_ident",
+                "notes": "Not known whether the engine ECU speaks UDS (ISO 14229), KWP2000 (ISO 14230) or only legislated OBD."
+              },
+              "request_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "response_id": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "id_bits": {
+                "value": null,
+                "confidence": "unknown",
+                "verify": "verify.uds_discover"
+              },
+              "part_number_patterns": [],
+              "software_version_patterns": [],
+              "system_name_patterns": [],
+              "dids": [],
+              "manufacturer_pids": [],
+              "notes": "No citable source ties an ECU family, supplier, diagnostic protocol or CAN identifier to this variant. Do not assume that a generic ECU or the OBD default 0x7E0/0x7E8 pair applies."
+            }
+          ],
+          "notes": null
+        }
+      ]
+    }
+  ]
+}

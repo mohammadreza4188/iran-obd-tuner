@@ -22,12 +22,14 @@ __all__ = [
     "AdapterNotImplementedError",
     "AdapterTimeoutError",
     "ConfigurationError",
+    "EvidenceExportError",
     "IranObdTunerError",
     "KnowledgeDatabaseError",
     "ProtocolError",
     "SafetyGuardError",
     "UnsupportedOperationError",
     "UnsupportedPidError",
+    "VehicleKnowledgeError",
 ]
 
 
@@ -46,6 +48,21 @@ class ConfigurationError(IranObdTunerError):
 
 class KnowledgeDatabaseError(IranObdTunerError):
     """The knowledge database (ECU/DTC/map data) could not be read or is malformed."""
+
+
+class EvidenceExportError(IranObdTunerError):
+    """A Field Evidence Bundle could not be built, written or verified.
+
+    Raised, for example, when VIN redaction was requested but the VIN would still appear in
+    the bundle: the export fails closed instead of leaking it.
+    """
+
+
+class VehicleKnowledgeError(KnowledgeDatabaseError):
+    """A vehicle knowledge pack is unreadable or violates the pack schema.
+
+    The message names the pack and the JSON path of the offending value.
+    """
 
 
 # --------------------------------------------------------------------------- #
