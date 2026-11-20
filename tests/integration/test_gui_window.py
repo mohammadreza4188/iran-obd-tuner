@@ -3,13 +3,18 @@
 Skipped when PySide6 (the optional ``[gui]`` extra) is not installed, and run on the
 "offscreen" Qt platform so they need no display and no OBD adapter. The window is built with
 :class:`AppDashboardBackend` (the production wiring); only the serial port list and, for
-failure scenarios, the simulated adapter are replaced. Nothing here opens a port.
+specific scenarios, the adapter are replaced. Real-adapter tests use the ELM327 adapter over
+a scripted transport. Nothing here opens a serial port.
+
+Adapter calls run on the window's background thread, so the tests wait for them with
+:func:`wait_until` instead of assuming they completed synchronously.
 """
 
 from __future__ import annotations
 
 import csv
 import os
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -29,6 +34,7 @@ from iran_obd_tuner.core.exceptions import AdapterConnectionError  # noqa: E402
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository  # noqa: E402
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession  # noqa: E402
 from iran_obd_tuner.hardware.base import ObdAdapter  # noqa: E402
+from iran_obd_tuner.hardware.elm327 import Elm327Adapter  # noqa: E402
 from iran_obd_tuner.hardware.mock import FailureMode, MockObdAdapter, MockScenario  # noqa: E402
 from iran_obd_tuner.ui.i18n import COPY  # noqa: E402
 from iran_obd_tuner.ui.main_window import DASHBOARD_PIDS, MainWindow  # noqa: E402
@@ -38,14 +44,31 @@ LAYOUT_LTR = Qt.LayoutDirection.LeftToRight
 LAYOUT_RTL = Qt.LayoutDirection.RightToLeft
 
 
+def wait_until(condition: Callable[[], bool], timeout_s: float = 5.0) -> None:
+    """Process Qt events until ``condition()`` holds; fail after ``timeout_s``."""
+    app = QApplication.instance()
+    deadline = time.monotonic() + timeout_s
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError("condition not reached in time")
+        app.processEvents()
+        time.sleep(0.002)
+
+
+def settle(window: MainWindow) -> None:
+    """Wait until every queued adapter job has delivered its result."""
+    wait_until(lambda: not window.busy)
+
+
 class TestBackend(AppDashboardBackend):
-    """Production wiring with a fixed port list and an optional adapter override."""
+    """Production wiring with a fixed port list and optional adapter overrides."""
 
     __test__ = False  # not a pytest test class
 
     def __init__(self, output_dir: Path) -> None:
         super().__init__(AppSettings(output_dir=output_dir), JsonKnowledgeRepository())
         self.adapter_factory: Callable[[], ObdAdapter] | None = None
+        self.real_adapter_factory: Callable[[str], ObdAdapter] | None = None
         self.sessions_created = 0
 
     def list_serial_ports(self) -> tuple[str, ...]:
@@ -55,6 +78,8 @@ class TestBackend(AppDashboardBackend):
         self.sessions_created += 1
         if simulation and self.adapter_factory is not None:
             return LiveDataSession(self.adapter_factory(), JsonKnowledgeRepository())
+        if not simulation and port is not None and self.real_adapter_factory is not None:
+            return LiveDataSession(self.real_adapter_factory(port), JsonKnowledgeRepository())
         return super().create_session(simulation=simulation, port=port)
 
 
@@ -63,6 +88,14 @@ class DroppingAdapter(MockObdAdapter):
 
     def read_measurement(self, pid: str):  # type: ignore[override]
         raise AdapterConnectionError("simulated cable unplug")
+
+
+class SlowConnectAdapter(MockObdAdapter):
+    """Takes a while to connect, like an ELM327 searching for a protocol."""
+
+    def _open(self, *, timeout_s: float | None) -> None:
+        time.sleep(0.4)
+        super()._open(timeout_s=timeout_s)
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +134,11 @@ def warnings_shown(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def _connect_simulation(window: MainWindow) -> None:
     window.mode_combo.setCurrentIndex(0)  # simulation
     window.connect_btn.click()
+    settle(window)
+
+
+def _log_texts(window: MainWindow) -> list[str]:
+    return [window.log_list.item(i).text() for i in range(window.log_list.count())]
 
 
 def test_window_builds_offline(window: MainWindow, backend: TestBackend) -> None:
@@ -114,7 +152,7 @@ def test_window_builds_offline(window: MainWindow, backend: TestBackend) -> None
     assert all(card.gauge.value is None for card in window.gauges.values())
 
 
-def test_port_selector_lists_auto_and_the_backend_ports(window: MainWindow) -> None:
+def test_port_selector_lists_a_placeholder_and_the_backend_ports(window: MainWindow) -> None:
     labels = [window.port_combo.itemText(i) for i in range(window.port_combo.count())]
 
     assert labels == [COPY["fa"]["auto"], "COM3", "COM4"]
@@ -144,14 +182,29 @@ def test_simulated_session_drives_gauges_codes_and_banner(window: MainWindow) ->
     assert window.gauges["rpm"].gauge.value > 0
     assert window.gauges["coolant"].gauge.value is not None
 
-    window._switch_tab("diag")
-    window._refresh_dtc()
     texts = [window.dtc_list.item(i).text() for i in range(window.dtc_list.count())]
     # descriptions come from the knowledge database, not from strings in the UI
     assert texts == [
         "P0300  —  Random/multiple cylinder misfire detected",
         "P0171  —  System too lean (bank 1)",
     ]
+
+
+def test_connecting_does_not_block_the_window(window: MainWindow, backend: TestBackend) -> None:
+    backend.adapter_factory = SlowConnectAdapter
+    window.mode_combo.setCurrentIndex(0)
+
+    started = time.monotonic()
+    window.connect_btn.click()
+    returned_after = time.monotonic() - started
+
+    assert returned_after < 0.2  # the click returns while the adapter is still connecting
+    assert window.connected is False
+    assert window.connect_btn.isEnabled() is False
+    assert window.connect_btn.text() == COPY["fa"]["connecting"]
+    wait_until(lambda: window.connected)
+    settle(window)
+    assert window.connect_btn.text() == COPY["fa"]["disconnect"]
 
 
 def test_unsupported_parameter_is_shown_as_unavailable(
@@ -167,18 +220,56 @@ def test_unsupported_parameter_is_shown_as_unavailable(
     assert window.gauges["rpm"].gauge.value == 842.0
 
 
-def test_real_adapter_is_refused_honestly_and_never_simulated(
+def test_real_adapter_without_a_port_is_refused_and_never_simulated(
     window: MainWindow, warnings_shown: list[str]
 ) -> None:
     window.lang_combo.setCurrentIndex(1)
-    window.mode_combo.setCurrentIndex(1)  # real adapter
+    window.mode_combo.setCurrentIndex(1)  # real adapter, port selector on the placeholder
     window.connect_btn.click()
 
     assert window.connected is False
     assert window.session is None
     assert len(warnings_shown) == 1
-    assert "not implemented" in warnings_shown[0]
+    assert "explicit serial port" in warnings_shown[0]
     assert window.sim_banner.isVisibleTo(window) is False
+
+
+def test_real_elm327_session_shows_vehicle_data_without_simulation_labels(
+    window: MainWindow,
+    backend: TestBackend,
+    scripted_transport,
+    can_vehicle_script,
+) -> None:
+    transports = []
+
+    def real_adapter(port: str) -> ObdAdapter:
+        transport = scripted_transport(can_vehicle_script)
+        transports.append(transport)
+        return Elm327Adapter(port, transport_factory=lambda _port, _baud: transport)
+
+    backend.real_adapter_factory = real_adapter
+    window.lang_combo.setCurrentIndex(1)
+    window.mode_combo.setCurrentIndex(1)  # real adapter
+    window.port_combo.setCurrentIndex(window.port_combo.findData("COM3"))
+    window.connect_btn.click()
+    wait_until(lambda: window.connected)
+    settle(window)
+
+    assert window.session is not None and window.session.simulated is False
+    assert window.sim_banner.isVisibleTo(window) is False
+    assert window.status_pill.text() == COPY["en"]["connected"]
+    assert window.gauges["rpm"].gauge.value == 1726.0
+    assert window.gauges["coolant"].gauge.value == 83.0
+    speed = window.gauges["speed"].gauge  # 010D answers NO DATA in the script
+    assert speed.value is None
+    assert speed.caption == COPY["en"]["pid_status"]["no_response"]
+    assert any("ISO 15765-4 CAN (11 bit ID, 500 kbaud)" in text for text in _log_texts(window))
+    assert window.dtc_list.item(0).text().startswith("P0133")
+
+    window.connect_btn.click()  # disconnect
+    settle(window)
+    assert transports[0].closed is True
+    assert not any(command.startswith("04") for command in transports[0].written)
 
 
 def test_connection_failure_is_reported(
@@ -190,6 +281,7 @@ def test_connection_failure_is_reported(
 
     assert window.connected is False
     assert window.timer.isActive() is False
+    assert window.connect_btn.isEnabled() is True
     assert len(warnings_shown) == 1
     assert "simulated failure" in warnings_shown[0]
 
@@ -214,10 +306,11 @@ def test_read_failures_are_never_shown_as_values_or_as_no_codes(
 def test_lost_connection_disconnects_cleanly(window: MainWindow, backend: TestBackend) -> None:
     backend.adapter_factory = DroppingAdapter
     _connect_simulation(window)  # the first poll loses the connection
+    settle(window)
 
     assert window.connected is False
     assert window.timer.isActive() is False
-    assert "simulated cable unplug" in window.log_list.item(1).text()
+    assert any("simulated cable unplug" in text for text in _log_texts(window))
 
 
 def test_clear_codes_is_refused_and_explained_without_blocking(
@@ -225,7 +318,6 @@ def test_clear_codes_is_refused_and_explained_without_blocking(
 ) -> None:
     window.lang_combo.setCurrentIndex(1)
     _connect_simulation(window)
-    window._refresh_dtc()
     codes_before = window.dtc_list.count()
 
     window._clear_dtc()  # must return: the dialog is opened non-blocking
@@ -235,8 +327,9 @@ def test_clear_codes_is_refused_and_explained_without_blocking(
     assert modal is not None and modal.isVisible()
     assert modal.message_label.text() == COPY["en"]["safety_clear_dtc_msg"]
     window._refresh_dtc()
+    settle(window)
     assert window.dtc_list.count() == codes_before  # nothing was cleared
-    assert "refused" in window.log_list.item(1).text()
+    assert any("refused" in text for text in _log_texts(window))
     modal.accept()
 
 
@@ -247,6 +340,7 @@ def test_identification_is_labelled_as_simulated(window: MainWindow) -> None:
 
     _connect_simulation(window)
     window._read_identification()
+    settle(window)
     text = window.ident_result_label.text()
     assert "SIMULATEDVIN00001" in text
     assert "Simulated data" in text
@@ -267,8 +361,7 @@ def test_recording_writes_a_labelled_csv(
 
     window.record_btn.click()
     assert window.recorder.recording is True
-    window._tick()
-    window._tick()
+    wait_until(lambda: window.recorder.count >= 2)
     window.record_btn.click()
 
     assert window.recorder.recording is False
@@ -285,6 +378,7 @@ def test_disconnect_stops_the_session_and_clears_gauges(window: MainWindow) -> N
     assert window.gauges["rpm"].gauge.value is not None
 
     window.connect_btn.click()  # the same button disconnects
+    settle(window)
 
     assert window.connected is False
     assert window.timer.isActive() is False
@@ -292,11 +386,21 @@ def test_disconnect_stops_the_session_and_clears_gauges(window: MainWindow) -> N
     assert window.sim_banner.isVisibleTo(window) is False
 
 
-def test_closing_the_window_stops_a_running_recording(
-    qt_app: QApplication, backend: TestBackend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_closing_the_window_stops_recording_and_closes_the_adapter(
+    qt_app: QApplication,
+    backend: TestBackend,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target = tmp_path / "on-close.csv"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *_a: (str(target), "")))
+    adapters: list[MockObdAdapter] = []
+
+    def tracked() -> MockObdAdapter:
+        adapters.append(MockObdAdapter(MockScenario.drive_cycle()))
+        return adapters[-1]
+
+    backend.adapter_factory = tracked
     win = MainWindow(backend)
     _connect_simulation(win)
     win.record_btn.click()
@@ -306,4 +410,5 @@ def test_closing_the_window_stops_a_running_recording(
 
     assert win.recorder.recording is False
     assert win.connected is False
+    assert adapters[0].is_connected is False  # the queued disconnect ran during shutdown
     assert target.read_text(encoding="utf-8").startswith("timestamp_utc,simulated,")

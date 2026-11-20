@@ -40,7 +40,7 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 - `hardware` از `diagnostics` و `database` import نمی‌کند (لایه انتقال، تفسیر نمی‌کند).
 - `database` از `hardware`/`diagnostics` import نمی‌کند.
 - `tuning` جایگزین `diagnostics` نیست: مسیرهای جدا، فراخوانی‌های جدا.
-- import کتابخانه‌های خارجی (`python-obd`, `PySide6`, `python-can`, `udsoncan`) فقط داخل
+- import کتابخانه‌های خارجی (`pyserial`, `PySide6`, `python-can`, `udsoncan`) فقط داخل
   ماژول همان آداپتور/رابط انجام می‌شود، نه در `__init__` بسته‌ها — تا نبودِ آن وابستگی
   «قابل گزارش» بماند و برنامه بدون آن هم اجرا شود.
 - `ui` هیچ‌وقت آداپتور انتخاب نمی‌کند و `hardware`/`database`/`tuning` را import نمی‌کند. پنجره
@@ -66,6 +66,10 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `hardware/mock.py` | `MockObdAdapter`, `MockScenario` (ایستا + `drive_cycle`)، `FailureMode`، `MotionProfile` | پیاده‌شده |
 | `hardware/registry.py` | اعلام آداپتورها + ساخت آداپتور | پیاده‌شده |
 | `hardware/serial_ports.py` | فهرست درگاه‌های سریال بدون باز کردن آن‌ها (pyserial تنبل) | پیاده‌شده |
+| `hardware/transport.py` | قرارداد `Transport` + `PySerialTransport` (pyserial تنبل) | پیاده‌شده |
+| `hardware/elm327_protocol.py` | تجزیه خالص پاسخ‌های ELM327 + فهرست سفید دستورها | پیاده‌شده (تست با نمونه‌های datasheet) |
+| `hardware/elm327.py` | `Elm327Adapter` فقط‌خواندنی | پیاده‌شده، **روی سخت‌افزار اعتبارسنجی نشده** |
+| `ui/worker.py` | `BackgroundRunner`: یک thread پس‌زمینه، اجرای ترتیبی کارهای آداپتور | پیاده‌شده |
 | `diagnostics/service.py` | `DiagnosticService.collect_report()` + تفسیر مشترک کد خطا و شناسه خودرو | پیاده‌شده |
 | `diagnostics/live_data.py` | `LiveDataSession`, `LiveSnapshot`, `PidReading`, `PidStatus` | پیاده‌شده |
 | `diagnostics/recorder.py` | `CsvRecorder` (UTC، واحد، ستون `simulated`) | پیاده‌شده |
@@ -102,7 +106,7 @@ CLI/UI
 app.gui_main → load_settings + configure_logging → AppDashboardBackend
   └─ ui.MainWindow(backend)
        └─ backend.create_session(simulation, port)   ← شبیه‌سازی: mock + drive_cycle
-            │                                           واقعی: elm327 (فعلاً AdapterNotImplementedError)
+            │                                           واقعی: elm327 روی درگاه انتخاب‌شده (بدون درگاه: ConfigurationError)
             └─ diagnostics.LiveDataSession
                  ├─ connect()                         ← خطای اتصال = خطا، بدون جایگزینی با شبیه‌ساز
                  ├─ poll(DASHBOARD_PIDS)  → LiveSnapshot (وضعیت جدا برای هر PID، بدون مقدار جایگزین)
@@ -233,6 +237,10 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۱۲ | (Milestone 1) حذف `ObdService` و هر پیاده‌سازی سرویس ۰۴؛ داشبورد روی `LiveDataSession` + `ObdAdapter` | یک مسیر داده، یک مدل (`Measurement`)، یک مرز ایمنی؛ قابلیت نوشتن پنهان باقی نمی‌ماند | نگه داشتن مسیر python-OBD پشت policy |
 | ۱۳ | (Milestone 1) `ui` فقط یک Protocol (`DashboardBackend`) می‌شناسد و `app` آن را پیاده می‌کند | UI آداپتور انتخاب نمی‌کند، تست‌ها backend دلخواه می‌دهند، `ui → app` ایجاد نمی‌شود | ساخت آداپتور داخل `MainWindow` |
 | ۱۴ | (Milestone 1) هیچ مقدار جایگزین: هر PID وضعیت دارد و خانه CSV خالی می‌ماند | عدد ساختگی (مثل ۱۲٫۶ ولت یا صفر) قابل تشخیص از داده واقعی نیست | مقدار پیش‌فرض برای PID ناموفق |
+| ۱۶ | (Milestone 2) درایور ELM327 خودِ پروژه روی pyserial به‌جای python-OBD | کنترل کامل timeout و خطاهای نوع‌دار، تست قطعی با transcript، حذف `pint`؛ python-OBD خطاها را می‌بلعد و قدیمی است | python-OBD پشت `ObdAdapter` |
+| ۱۷ | (Milestone 2) فهرست سفید دستور در نقطه واحد ارسال + `AT TP 0` به‌جای `AT SP 0` | دفاع چندلایه: حتی باگ در کد بالاتر نمی‌تواند سرویس ۰۴ یا UDS بفرستد؛ EEPROM آداپتور نوشته نمی‌شود | اتکا فقط به گارد `core.safety` |
+| ۱۸ | (Milestone 2) بدون جستجوی خودکار درگاه؛ قطع اتصال اگر دستگاه به `ATZ` به‌عنوان ELM327 پاسخ ندهد | ارسال فرمان به دستگاه ناشناخته روی درگاه دیگر خطرناک است | امتحان همه درگاه‌ها |
+| ۱۹ | (Milestone 2) همه I/O آداپتور روی یک thread پس‌زمینه، به ترتیب؛ نتیجه‌های کهنه پس از قطع دور ریخته می‌شوند | جستجوی پروتکل تا ده‌ها ثانیه طول می‌کشد؛ session ایمن برای چند thread نیست | thread pool |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
@@ -240,27 +248,29 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 سه ناهمگونی که در ادغام فاز ۱ ثبت شده بود (دو مسیر خواندن، `SAMPLE_DTC` تکراری، `LiveSample`
 بدون واحد و زمان) در **Milestone 1 برطرف شدند** (ADR ۱۲ تا ۱۴). بدهی باقی‌مانده:
 
-1. **خواندن روی thread اصلی GUI:** برای شبیه‌ساز درون‌حافظه‌ای مشکلی نیست. برای ELM327 باید
-   در Milestone 2 یک worker پس‌زمینه اضافه شود.
+1. ~~**خواندن روی thread اصلی GUI**~~ — **برطرف شد (Milestone 2، ADR ۱۹).** بستن پنجره در میانه جستجوی
+   پروتکل تا پایان همان درخواست (حداکثر حدود ۴۵ ثانیه) منتظر می‌ماند.
 2. **`VehicleInfo.protocol`** از اولین پروتکل اعلام‌شده در `AdapterInfo.protocols` پر می‌شود، نه
-   از پروتکل مذاکره‌شده. آداپتور واقعی باید پروتکل فعال را گزارش کند (Milestone 2).
+   از پروتکل مذاکره‌شده. — **برطرف شد (Milestone 2):** `ObdAdapter.active_protocol`.
 3. **CI تست‌های GUI را اجرا نمی‌کند** (`[gui]` در CI نصب نمی‌شود). اگر یک job جدا با
    PySide6 و `QT_QPA_PLATFORM=offscreen` اضافه شود، کهنه شدن تست‌های GUI دیده می‌شود.
 4. **پالت رنگ** در `gauges.py`، `main_window.py` و `safety_modal.py` تکرار شده است و آیکون هنوز
    پالت آبی قدیمی را دارد. فونت `Vazirmatn-Regular.ttf` در مخزن نیست، پس همیشه فونت جایگزین
    بارگذاری می‌شود.
-5. **وابستگی‌ها:** `pyqtgraph` در `[gui]` تعریف شده ولی هیچ جا import نمی‌شود. `requirements.txt`
-   با `pyproject.toml` هم‌خوان نیست (`pyqtgraph`، `crcmod`).
+5. **وابستگی‌ها:** `pyqtgraph` در `[gui]` تعریف شده ولی هیچ جا import نمی‌شود. (`requirements.txt` در Milestone 2
+   با `pyproject.toml` هم‌خوان شد.)
 6. **توضیح کدهای خطا** فقط انگلیسی است. کاتالوگ فارسی نیازمند منبع مستند است.
+7. **ELM327 با headerهای خاموش** پاسخ چند ECU را از هم تشخیص نمی‌دهد: برای هر مقدار اولین پاسخ
+   استفاده می‌شود و bitmaskها با هم ترکیب می‌شوند. پاسخ چندفریمی درهم رد می‌شود.
+8. **ELM327 روی سخت‌افزار واقعی اعتبارسنجی نشده است.** timeoutهای `RESET_TIMEOUT_S` و `SEARCH_TIMEOUT_S`
+   برآورد محافظه‌کارانه‌اند و رفتار کلون‌های ارزان ممکن است با datasheet فرق کند.
 
 ### تصمیم‌هایی که نیازمند تأیید تیم است
 
 1. **کف نسخه پایتون (`>=3.11`)** — بر پایه دسترس بودن `tomllib` و تایپینگ مدرن انتخاب شده و
    روی ۳٫۱۲ و ۳٫۱۳ تست شده است؛ اگر یکی از اعضا روی ۳٫۹/۳٫۱۰ کار می‌کند باید تأیید/تغییر شود.
-2. **نام درست پکیج `obd` روی PyPI** — همکار فاز ۱ نام را از `python-obd` به `obd` تغییر داده بود
-   و این اصلاح حفظ شد (روی PyPI نام `python-obd` وجود ندارد؛ `obd` نسخه ۰٫۷٫۳ است). نسخه‌های دیگر
-   وابستگی‌ها دست‌نخورده ماندند. بالادست `obd` مدت‌هاست به‌روزرسانی نشده؛ سازگاری آن با پایتون
-   ۳٫۱۲/۳٫۱۳ باید روی ماشین توسعه با آداپتور واقعی تأیید شود (در این محیط آزمایش نشد).
+2. ~~**نام درست پکیج `obd` روی PyPI**~~ — **دیگر مطرح نیست (Milestone 2):** python-OBD استفاده نمی‌شود و
+   از extraها حذف شد (ADR ۱۶).
 3. **جابه‌جایی پوشه‌ها** از `src/<module>/` به `src/iran_obd_tuner/<module>/` (ADR ۱ و ۹) — اگر
    روی شاخه‌ای کد محلی در مسیرهای قبلی وجود دارد، پیش از merge هماهنگ شود.
 4. **فایل `LICENSE` (MIT)** — README از قبل مجوز MIT را اعلام کرده بود ولی فایل مجوز وجود
@@ -272,12 +282,12 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
    حذف شد. هر پیاده‌سازی آینده نیازمند تأیید صریح، سیاست کدی مخصوص، تأیید چندمرحله‌ای در UI و
    به‌روزرسانی جدول قابلیت‌هاست (CLAUDE.md بخش ۶).
 7. ~~**یکسان‌سازی سرویس داشبورد با `ObdAdapter`**~~ — **انجام شد (Milestone 1)**، ADR ۱۲.
-8. **پایه آداپتور ELM327 در Milestone 2** — python-OBD پشت `ObdAdapter`، یا یک درایور سبک
-   ELM327 روی pyserial همراه transport جعلی برای تست. پیش از شروع Milestone 2 تصمیم گرفته شود.
+8. ~~**پایه آداپتور ELM327 در Milestone 2**~~ — **تصمیم گرفته شد:** درایور خود پروژه روی pyserial
+   (ADR ۱۶). بسته `obd` از extraها حذف شد.
 
 ## ۱۰. خارج از محدوده این نسخه
 
-- آداپتور واقعی ELM327/CAN و رمزگشایی فریم خام (`python-obd`, `python-can`, `udsoncan`)
+- آداپتور CAN مستقیم، ISO-TP و UDS (`python-can`, `can-isotp`, `udsoncan`) — فاز ۲
 - هر نوع نوشتن/فلش/Security Access
 - نرمال‌سازی/دیتابیس ECU و نقشه‌ها (A2L/DAMOS)
 - ضبط بلندمدت Live Data، چند-خودرویی، شبکه/همگام‌سازی ابری

@@ -13,8 +13,8 @@ Honesty rules implemented here:
 * whether data is simulated comes from ``AdapterInfo.simulated`` and travels with every
   :class:`LiveSnapshot`.
 
-Not implemented here: background polling (callers poll; a worker thread for slow real
-adapters arrives with the ELM327 adapter), freeze frames, pending/permanent trouble codes.
+Not implemented here: freeze frames, pending/permanent trouble codes. The session is not
+thread-safe; the dashboard serialises all calls on one worker thread.
 State-changing requests are refused by the adapter's safety gate; no implementation exists.
 """
 
@@ -149,6 +149,11 @@ class LiveDataSession:
         return self._adapter.is_connected
 
     @property
+    def active_protocol(self) -> str | None:
+        """Protocol negotiated with the vehicle, ``None`` until known."""
+        return self._adapter.active_protocol
+
+    @property
     def connect_timeout_s(self) -> float:
         """Seconds :meth:`connect` waits for the adapter."""
         return self._connect_timeout_s
@@ -195,7 +200,7 @@ class LiveDataSession:
         Raises:
             AdapterError: If the request fails.
         """
-        return vehicle_info_for(self._adapter.info, self._adapter.read_vin())
+        return vehicle_info_for(self._adapter, self._adapter.read_vin())
 
     def request_clear_trouble_codes(self) -> None:
         """Forward a "clear trouble codes" request to the adapter's safety gate.

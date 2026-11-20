@@ -1,0 +1,242 @@
+"""Read-only ELM327 adapter (serial/USB), implemented directly on a byte transport.
+
+Status: implemented and tested against scripted replies taken from the ELM327 data sheet;
+**not yet validated against a physical adapter or vehicle**. Behaviour of cheap clones may
+differ from the data sheet.
+
+Session set-up (``connect``):
+
+1. open the serial port (:class:`~iran_obd_tuner.hardware.transport.PySerialTransport`);
+2. ``AT Z`` - reset; the reply must identify an ELM327, otherwise the port is closed again
+   (protects other devices that might sit on the selected port);
+3. ``AT E0``, ``AT L0``, ``AT H0`` - echo, linefeeds and headers off;
+4. ``AT TP 0`` - automatic protocol search *without* writing the adapter's EEPROM (``AT SP``
+   would store the protocol permanently);
+5. ``01 00`` (and ``01 20``, ``01 40`` ... while announced) - triggers the search and reads
+   which service 01 parameters the vehicle supports;
+6. ``AT DPN`` - which protocol was found (reported as :attr:`active_protocol`).
+
+Safety: every command passes :func:`~iran_obd_tuner.hardware.elm327_protocol.
+check_command_allowed` before it is written, so only AT set-up commands and OBD services
+01, 03 and 09 can ever be sent. Clearing trouble codes (service 04) is refused by the base
+class safety gate and, independently, could not pass the whitelist.
+
+Not implemented: automatic port probing (the user must choose the port), header parsing
+to tell several ECUs apart, pending/permanent trouble codes (services 07/0A), freeze frames.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from iran_obd_tuner.core.exceptions import (
+    AdapterConnectionError,
+    ProtocolError,
+    UnsupportedPidError,
+)
+from iran_obd_tuner.core.logging import get_logger
+from iran_obd_tuner.core.models import Measurement
+from iran_obd_tuner.core.pids import describe_pid, normalize_pid
+from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
+from iran_obd_tuner.hardware import elm327_protocol as proto
+from iran_obd_tuner.hardware.base import AdapterInfo, AdapterKind, ObdAdapter
+from iran_obd_tuner.hardware.transport import PySerialTransport, Transport
+
+__all__ = ["ELM327_INFO", "ELM327_NAME", "Elm327Adapter"]
+
+ELM327_NAME = "elm327"
+
+ELM327_INFO = AdapterInfo(
+    name=ELM327_NAME,
+    kind=AdapterKind.SERIAL,
+    description="ELM327 compatible serial/USB adapter (read-only: services 01, 03, 09).",
+    implemented=True,
+    protocols=tuple(proto.PROTOCOL_NAMES[n] for n in "123456789"),
+    hardware_required=True,
+    notes=(
+        "Implemented against the ELM327 data sheet and tested with scripted replies; NOT yet "
+        "validated on a physical adapter or vehicle. Needs pyserial ([obd] extra) and an "
+        "explicitly selected serial port. Clone protocol coverage varies."
+    ),
+    simulated=False,
+)
+
+#: Seconds an ``AT Z`` reset may take (the data sheet gives no figure; generous estimate).
+RESET_TIMEOUT_S = 5.0
+#: Seconds the first request may take while the adapter searches all protocols. Slow ISO
+#: 9141/14230 initiations take 2-3 s each (data sheet); this is a generous, unverified bound.
+SEARCH_TIMEOUT_S = 30.0
+
+TransportFactory = Callable[[str, int], Transport]
+
+
+class Elm327Adapter(ObdAdapter):
+    """Read-only ELM327 adapter.
+
+    Args:
+        port: Serial port name, e.g. ``"COM3"`` or ``"/dev/ttyUSB0"``.
+        baudrate: Serial baud rate (ELM327 parts use 9600 or 38400 by default).
+        command_timeout_s: Seconds to wait for the prompt after a normal request.
+        policy: Safety policy for state-changing operations (none is implemented).
+        transport_factory: Opens the byte transport; replaced by a scripted fake in tests.
+    """
+
+    def __init__(
+        self,
+        port: str,
+        *,
+        baudrate: int = 38400,
+        command_timeout_s: float = 2.0,
+        policy: SafetyPolicy = DEFAULT_POLICY,
+        transport_factory: TransportFactory = PySerialTransport.open,
+    ) -> None:
+        super().__init__(policy=policy)
+        if not port.strip():
+            raise ValueError("an explicit serial port is required")
+        self._port = port.strip()
+        self._baudrate = baudrate
+        self._command_timeout_s = command_timeout_s
+        self._transport_factory = transport_factory
+        self._transport: Transport | None = None
+        self._protocol: proto.ProtocolInfo | None = None
+        self._supported: frozenset[str] = frozenset()
+        self._version: str | None = None
+        self._log = get_logger("hardware.elm327")
+
+    # ------------------------------------------------------------------ identity
+    @property
+    def info(self) -> AdapterInfo:
+        return ELM327_INFO
+
+    @property
+    def port(self) -> str:
+        """Serial port this adapter uses."""
+        return self._port
+
+    @property
+    def version(self) -> str | None:
+        """Identification line printed by ``AT Z`` (e.g. ``"ELM327 v1.5"``), once known."""
+        return self._version
+
+    @property
+    def active_protocol(self) -> str | None:
+        if self._protocol is None:
+            return None
+        return self._protocol.name
+
+    # ------------------------------------------------------------------ lifecycle
+    def _open(self, *, timeout_s: float | None) -> None:
+        self._transport = self._transport_factory(self._port, self._baudrate)
+        try:
+            self._initialise(timeout_s)
+        except BaseException:
+            self._close()
+            raise
+
+    def _initialise(self, timeout_s: float | None) -> None:
+        reset_timeout = max(RESET_TIMEOUT_S, timeout_s or 0.0)
+        reply = self._command("ATZ", timeout_s=reset_timeout, check_status=False)
+        identity = next((line for line in reply if "ELM327" in line.upper()), None)
+        if identity is None:
+            raise AdapterConnectionError(
+                f"the device on {self._port} did not identify as an ELM327 "
+                f"(reply to AT Z: {reply!r}); no further commands were sent"
+            )
+        self._version = identity
+        self._log.info("adapter on %s: %s", self._port, identity)
+
+        for command in ("ATE0", "ATL0", "ATH0", "ATTP0"):
+            lines = self._command(command)
+            if not any(line.upper() == "OK" for line in lines):
+                raise ProtocolError(f"{command} was not acknowledged: {lines!r}")
+
+        search_timeout = max(SEARCH_TIMEOUT_S, timeout_s or 0.0)
+        self._supported = self._read_supported_bitmasks(search_timeout)
+        self._protocol = proto.parse_dpn(self._command("ATDPN"))
+        self._log.info(
+            "vehicle protocol: %s (%s); %d service 01 parameter(s) supported",
+            self._protocol.name,
+            "automatic" if self._protocol.automatic else "fixed",
+            len(self._supported),
+        )
+
+    def _read_supported_bitmasks(self, search_timeout_s: float) -> frozenset[str]:
+        supported: set[int] = set()
+        base = 0x00
+        while True:
+            timeout = search_timeout_s if base == 0x00 else self._command_timeout_s
+            try:
+                lines = self._command(f"01{base:02X}", timeout_s=timeout)
+            except proto.NoDataError:
+                if base == 0x00:
+                    raise AdapterConnectionError(
+                        "the vehicle did not answer 01 00 (supported PIDs); is the ignition on?"
+                    ) from None
+                break  # announced but not answered: treat the rest as unsupported
+            supported |= proto.parse_supported_pids(proto.parse_messages(lines), base)
+            next_base = base + 0x20
+            if next_base not in supported or next_base > 0xE0:
+                break
+            base = next_base
+        return frozenset(f"01{pid:02X}" for pid in supported)
+
+    def _close(self) -> None:
+        transport, self._transport = self._transport, None
+        if transport is not None:
+            transport.close()
+
+    # ------------------------------------------------------------------ transport
+    def _command(
+        self,
+        command: str,
+        *,
+        timeout_s: float | None = None,
+        check_status: bool = True,
+    ) -> list[str]:
+        """Send one whitelisted command and return the cleaned reply lines."""
+        normalized = proto.check_command_allowed(command)
+        if self._transport is None:
+            raise AdapterConnectionError(f"{ELM327_NAME}: adapter is not connected")
+        self._transport.discard_input()
+        self._transport.write(normalized.encode("ascii") + b"\r")
+        raw = self._transport.read_until(
+            proto.PROMPT, self._command_timeout_s if timeout_s is None else timeout_s
+        )
+        lines = proto.clean_reply(raw, normalized)
+        self._log.debug("%s -> %r", normalized, lines)
+        if check_status:
+            proto.raise_for_status(lines, normalized)
+        return lines
+
+    # ------------------------------------------------------------------ reads
+    def read_vin(self) -> str | None:
+        self._require_connected()
+        try:
+            lines = self._command("0902")
+        except proto.NoDataError:
+            return None  # service 09 PID 02 is optional; "not available" is a valid answer
+        return proto.parse_vin(proto.parse_messages(lines))
+
+    def read_supported_pids(self) -> tuple[str, ...]:
+        self._require_connected()
+        return tuple(sorted(self._supported))
+
+    def read_measurement(self, pid: str) -> Measurement:
+        self._require_connected()
+        normalized = normalize_pid(pid)
+        spec = describe_pid(normalized)
+        if spec is None or spec.formula is None:
+            raise UnsupportedPidError(f"PID {normalized} has no decoding definition")
+        if normalized not in self._supported:
+            raise UnsupportedPidError(f"PID {normalized} is not supported by the vehicle")
+        lines = self._command(normalized)
+        data = proto.parse_mode01_data(
+            proto.parse_messages(lines), int(normalized[2:], 16), spec.data_bytes
+        )
+        return Measurement(pid=spec.pid, name=spec.name, value=spec.decode(data), unit=spec.unit)
+
+    def read_diagnostic_trouble_codes(self) -> tuple[str, ...]:
+        self._require_connected()
+        lines = self._command("03")
+        can = self._protocol.is_can if self._protocol is not None else False
+        return proto.parse_stored_dtcs(proto.parse_messages(lines), can=can)

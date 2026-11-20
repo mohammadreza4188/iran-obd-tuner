@@ -14,8 +14,10 @@ Honesty rules visible here:
 * simulated sessions show a permanent banner, and recordings carry a ``simulated`` column;
 * "clear codes" is forwarded to the adapter's safety gate, refused, and explained.
 
-Not implemented: background polling (all reads run on the GUI thread, which is fine for
-the in-memory simulator; a worker arrives with the ELM327 adapter), freeze frames, reports.
+Every adapter call (connect, poll, trouble codes, identification) runs on one background
+thread (:class:`~iran_obd_tuner.ui.worker.BackgroundRunner`), so a slow serial adapter
+never freezes the window; results are applied on the GUI thread, and results that arrive
+after a disconnect are dropped. Not implemented: freeze frames, reports.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
 from iran_obd_tuner.ui.icon import build_icon
 from iran_obd_tuner.ui.safety_modal import SafetyModal
+from iran_obd_tuner.ui.worker import BackgroundRunner
 
 __all__ = ["DASHBOARD_PIDS", "GAUGES", "GaugeSpec", "MainWindow"]
 
@@ -129,6 +132,22 @@ _RECORD_STYLE_ACTIVE = (
     "background-color: #ef4444; color: #ffffff; border: none; border-radius: 8px; "
     "padding: 8px 16px; font-weight: bold;"
 )
+
+
+def _describe(error: BaseException) -> str:
+    """Text for an error raised by a background adapter job."""
+    if isinstance(error, IranObdTunerError):
+        return str(error)
+    _LOG.error("unexpected error in adapter job", exc_info=error)
+    return f"{type(error).__name__}: {error}"
+
+
+def _ignore(_result: object) -> None:
+    """Callback for jobs whose result is not needed."""
+
+
+def _log_background_error(error: BaseException) -> None:
+    _LOG.warning("background adapter job failed: %s", error)
 
 
 class Sparkline(QWidget):
@@ -205,6 +224,11 @@ class MainWindow(QMainWindow):
         # Vehicle identification, or (i18n key, error detail) when it is not available.
         self._ident_state: VehicleInfo | tuple[str, str] | None = None
         self._safety_modal: SafetyModal | None = None
+        # Adapter I/O runs on one background thread; results come back as callbacks.
+        self._runner = BackgroundRunner(self)
+        self._connecting = False
+        self._poll_pending = False
+        self._generation = 0  # bumped on disconnect; stale results are dropped
 
         self.setMinimumSize(1100, 800)
         self.setWindowIcon(build_icon())
@@ -229,7 +253,12 @@ class MainWindow(QMainWindow):
     @property
     def connected(self) -> bool:
         """Whether a session is open."""
-        return self._session is not None and self._session.is_connected
+        return self._session is not None
+
+    @property
+    def busy(self) -> bool:
+        """Whether adapter jobs are still running or queued (used by tests)."""
+        return self._runner.pending > 0
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -622,7 +651,9 @@ class MainWindow(QMainWindow):
 
     # ----------------------------------------------------------- connection
     def _toggle_connect(self) -> None:
-        if self.connected:
+        if self._connecting:
+            return
+        if self._session is not None:
             self._disconnect()
             return
 
@@ -637,41 +668,50 @@ class MainWindow(QMainWindow):
             self._append_log("msg.adapter_unavailable", exc)
             QMessageBox.warning(self, t["title"], t["adapter_unavailable"].format(exc))
             return
-        try:
-            session.connect()
-        except IranObdTunerError as exc:
-            self._append_log("msg.connect_error", exc)
-            QMessageBox.warning(self, t["title"], t["connection_failed"].format(exc))
-            return
 
-        self._session = session
-        info = session.adapter_info
-        self._append_log("msg.connected", info.name, info.protocols[0] if info.protocols else "?")
-        self.connect_btn.setText(t["disconnect"])
+        self._connecting = True
+        self.connect_btn.setEnabled(False)
+        self.connect_btn.setText(t["connecting"])
         self.port_combo.setEnabled(False)
         self.refresh_ports_btn.setEnabled(False)
         self.mode_combo.setEnabled(False)
+        generation = self._generation
+        self._runner.submit(
+            session.connect,
+            lambda _result: self._on_connected(generation, session),
+            lambda exc: self._on_connect_failed(generation, exc),
+        )
+
+    def _on_connected(self, generation: int, session: LiveDataSession) -> None:
+        if generation != self._generation:  # the window was closed meanwhile
+            self._runner.submit(session.disconnect, _ignore, _log_background_error)
+            return
+        self._connecting = False
+        self._session = session
+        t = COPY[self.lang]
+        self._append_log("msg.connected", session.adapter_info.name, session.active_protocol or "?")
+        self.connect_btn.setEnabled(True)
+        self.connect_btn.setText(t["disconnect"])
         self.record_btn.setEnabled(True)
         self.sim_banner.setVisible(session.simulated)
         self._update_status_pill()
         self._refresh_dtc()
         self._tick()
-        if self.connected:
-            self.timer.start()
+        self.timer.start()
 
-    def _disconnect(self) -> None:
-        self.timer.stop()
-        if self.recorder.recording:
-            self._stop_recording()
-        was_connected = self._session is not None
-        if self._session is not None:
-            self._session.disconnect()
-        self._session = None
-        self._last_snapshot = None
-        self._dtc_state = None
-        self._ident_state = None
-        self.spark.clear()
+    def _on_connect_failed(self, generation: int, error: BaseException) -> None:
+        if generation != self._generation:
+            return
+        self._connecting = False
+        self._restore_idle_controls()
         t = COPY[self.lang]
+        detail = _describe(error)
+        self._append_log("msg.connect_error", detail)
+        QMessageBox.warning(self, t["title"], t["connection_failed"].format(detail))
+
+    def _restore_idle_controls(self) -> None:
+        t = COPY[self.lang]
+        self.connect_btn.setEnabled(True)
         self.connect_btn.setText(t["connect"])
         self.port_combo.setEnabled(True)
         self.refresh_ports_btn.setEnabled(True)
@@ -679,27 +719,58 @@ class MainWindow(QMainWindow):
         self.record_btn.setEnabled(False)
         self.sim_banner.setVisible(False)
         self._update_status_pill()
+
+    def _disconnect(self) -> None:
+        """Close the session (on the worker thread) and reset the window."""
+        self._generation += 1  # results of jobs still in flight are ignored from now on
+        self._connecting = False
+        self.timer.stop()
+        self._poll_pending = False
+        if self.recorder.recording:
+            self._stop_recording()
+        session, self._session = self._session, None
+        if session is not None:
+            self._runner.submit(session.disconnect, _ignore, _log_background_error)
+        self._last_snapshot = None
+        self._dtc_state = None
+        self._ident_state = None
+        self.spark.clear()
+        self._restore_idle_controls()
         self._render_snapshot()
         self._render_dtc()
         self._render_identification()
-        if was_connected:
+        if session is not None:
             self._append_log("msg.disconnected")
 
     def _tick(self) -> None:
-        if self._session is None or not self._session.is_connected:
+        session = self._session
+        if session is None or self._poll_pending:
+            return  # never queue a second poll behind a slow one
+        self._poll_pending = True
+        generation = self._generation
+        self._runner.submit(
+            lambda: session.poll(DASHBOARD_PIDS),
+            lambda snapshot: self._on_snapshot(generation, snapshot),
+            lambda exc: self._on_poll_failed(generation, exc),
+        )
+
+    def _on_snapshot(self, generation: int, snapshot: LiveSnapshot) -> None:
+        if generation != self._generation:
             return
-        try:
-            snapshot = self._session.poll(DASHBOARD_PIDS)
-        except IranObdTunerError as exc:
-            self._append_log("msg.connection_lost", exc)
-            self._disconnect()
-            return
+        self._poll_pending = False
         self._last_snapshot = snapshot
         self._render_snapshot()
         self.spark.push(snapshot.value_for("010C"), snapshot.value_for("010D"))
         if self.recorder.recording:
             self.recorder.write(snapshot)
         self._update_recording_label()
+
+    def _on_poll_failed(self, generation: int, error: BaseException) -> None:
+        if generation != self._generation:
+            return
+        self._poll_pending = False
+        self._append_log("msg.connection_lost", _describe(error))
+        self._disconnect()
 
     def _render_snapshot(self) -> None:
         t = COPY[self.lang]
@@ -716,18 +787,27 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ trouble codes
     def _refresh_dtc(self) -> None:
-        if self._session is None or not self._session.is_connected:
+        session = self._session
+        if session is None:
             self._dtc_state = None
             self._render_dtc()
             return
-        try:
-            codes = self._session.read_trouble_codes()
-        except IranObdTunerError as exc:
-            self._dtc_state = str(exc)
-            self._append_log("msg.dtc_read_error", exc)
+        generation = self._generation
+        self._runner.submit(
+            session.read_trouble_codes,
+            lambda codes: self._on_dtc(generation, codes),
+            lambda exc: self._on_dtc(generation, exc),
+        )
+
+    def _on_dtc(self, generation: int, result: tuple[TroubleCode, ...] | BaseException) -> None:
+        if generation != self._generation:
+            return
+        if isinstance(result, BaseException):
+            self._dtc_state = _describe(result)
+            self._append_log("msg.dtc_read_error", self._dtc_state)
         else:
-            self._dtc_state = codes
-            self._append_log("msg.dtc_read", len(codes))
+            self._dtc_state = result
+            self._append_log("msg.dtc_read", len(result))
         self._render_dtc()
 
     def _render_dtc(self) -> None:
@@ -746,8 +826,11 @@ class MainWindow(QMainWindow):
                 self.dtc_list.addItem(f"{code.code}  —  {description}")
 
     def _clear_dtc(self) -> None:
-        """Forward the request to the adapter's safety gate and explain the refusal."""
-        if self._session is not None and self._session.is_connected:
+        """Forward the request to the adapter's safety gate and explain the refusal.
+
+        Runs on the GUI thread on purpose: the gate refuses before any I/O happens.
+        """
+        if self._session is not None:
             try:
                 self._session.request_clear_trouble_codes()
             except (SafetyGuardError, UnsupportedOperationError) as exc:
@@ -763,18 +846,27 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ identification
     def _read_identification(self) -> None:
-        if self._session is None or not self._session.is_connected:
+        session = self._session
+        if session is None:
             self._ident_state = ("ident_not_connected", "")
             self._render_identification()
             return
-        try:
-            info = self._session.read_vehicle_info()
-        except IranObdTunerError as exc:
-            self._ident_state = ("ident_failed", str(exc))
-            self._append_log("msg.ident_error", exc)
+        generation = self._generation
+        self._runner.submit(
+            session.read_vehicle_info,
+            lambda info: self._on_identification(generation, info),
+            lambda exc: self._on_identification(generation, exc),
+        )
+
+    def _on_identification(self, generation: int, result: VehicleInfo | BaseException) -> None:
+        if generation != self._generation:
+            return
+        if isinstance(result, BaseException):
+            self._ident_state = ("ident_failed", _describe(result))
+            self._append_log("msg.ident_error", _describe(result))
         else:
-            self._ident_state = info
-            self._append_log("msg.ident_read", info.vin or "-")
+            self._ident_state = result
+            self._append_log("msg.ident_read", result.vin or "-")
         self._render_identification()
 
     def _render_identification(self) -> None:
@@ -858,4 +950,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._disconnect()
+        # Stops the worker thread and runs the queued disconnect, so no port stays open.
+        self._runner.shutdown()
         super().closeEvent(event)

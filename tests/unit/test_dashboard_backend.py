@@ -9,7 +9,7 @@ import pytest
 from iran_obd_tuner.app import dashboard
 from iran_obd_tuner.app.dashboard import AppDashboardBackend
 from iran_obd_tuner.core.config import AppSettings
-from iran_obd_tuner.core.exceptions import AdapterNotImplementedError
+from iran_obd_tuner.core.exceptions import ConfigurationError
 
 
 def test_simulation_session_uses_the_simulated_drive_cycle() -> None:
@@ -23,18 +23,21 @@ def test_simulation_session_uses_the_simulated_drive_cycle() -> None:
     assert "drive cycle" in session.adapter_info.notes
 
 
-def test_real_adapter_request_never_falls_back_to_the_simulator() -> None:
-    backend = AppDashboardBackend(AppSettings())
+def test_real_adapter_session_uses_the_selected_port_and_settings() -> None:
+    backend = AppDashboardBackend(AppSettings(serial_baudrate=9600, command_timeout_s=1.5))
 
-    with pytest.raises(AdapterNotImplementedError, match="elm327"):
-        backend.create_session(simulation=False, port="COM3")
+    session = backend.create_session(simulation=False, port="COM3")
+
+    assert session.adapter_info.name == "elm327"
+    assert session.simulated is False
+    assert session.is_connected is False  # nothing is opened until connect()
 
 
-def test_real_adapter_ignores_a_mock_adapter_setting() -> None:
+def test_real_adapter_needs_a_port_and_never_falls_back_to_the_simulator() -> None:
     """Even with ``adapter = "mock"`` configured, "real adapter" means a real adapter."""
     backend = AppDashboardBackend(AppSettings(adapter="mock"))
 
-    with pytest.raises(AdapterNotImplementedError):
+    with pytest.raises(ConfigurationError, match="explicit serial port"):
         backend.create_session(simulation=False, port=None)
 
 

@@ -11,11 +11,18 @@ a real adapter (planned: ELM327, milestone 2), not of this module.
 
 from __future__ import annotations
 
+import re
+
 from iran_obd_tuner.core.logging import get_logger
 
 __all__ = ["list_serial_ports"]
 
 _LOG = get_logger("hardware.serial_ports")
+
+
+def _natural_key(name: str) -> list[int | str]:
+    """Sort ``COM3`` before ``COM10`` (numbers compared as numbers)."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", name)]
 
 
 def list_serial_ports() -> tuple[str, ...]:
@@ -29,7 +36,7 @@ def list_serial_ports() -> tuple[str, ...]:
         _LOG.debug("pyserial is not installed; no serial ports listed")
         return ()
     try:
-        return tuple(sorted(port.device for port in list_ports.comports()))
+        return tuple(sorted((port.device for port in list_ports.comports()), key=_natural_key))
     except OSError as exc:
         _LOG.warning("serial port enumeration failed: %s", exc)
         return ()

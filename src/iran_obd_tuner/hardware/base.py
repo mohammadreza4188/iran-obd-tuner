@@ -124,6 +124,15 @@ class ObdAdapter(ABC):
         """Safety policy this adapter enforces for state-changing operations."""
         return self._policy
 
+    @property
+    def active_protocol(self) -> str | None:
+        """Protocol actually used by the current (or last) connection, ``None`` if unknown.
+
+        Unlike :attr:`AdapterInfo.protocols` (what an adapter *can* speak), this is what was
+        negotiated with the vehicle. Adapters that can report it override this property.
+        """
+        return None
+
     # ------------------------------------------------------------------ #
     # connection lifecycle
     # ------------------------------------------------------------------ #

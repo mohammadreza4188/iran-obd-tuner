@@ -33,9 +33,12 @@ def _install_fake_pyserial(monkeypatch: pytest.MonkeyPatch, comports) -> None:
 
 
 def test_ports_are_listed_sorted(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_pyserial(monkeypatch, lambda: [_FakePortInfo("COM7"), _FakePortInfo("COM3")])
+    _install_fake_pyserial(
+        monkeypatch,
+        lambda: [_FakePortInfo("COM10"), _FakePortInfo("COM7"), _FakePortInfo("COM3")],
+    )
 
-    assert list_serial_ports() == ("COM3", "COM7")
+    assert list_serial_ports() == ("COM3", "COM7", "COM10")  # numeric, not text, order
 
 
 def test_missing_pyserial_lists_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

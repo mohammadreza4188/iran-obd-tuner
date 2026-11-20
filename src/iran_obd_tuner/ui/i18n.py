@@ -37,8 +37,9 @@ COPY: dict[str, dict[str, Any]] = {
         },
         "port": "درگاه",
         "refresh_ports": "بازخوانی فهرست درگاه‌ها",
-        "auto": "خودکار",
+        "auto": "— انتخاب درگاه —",
         "connect": "اتصال",
+        "connecting": "در حال اتصال…",
         "disconnect": "قطع اتصال",
         "connected": "متصل",
         "idle": "قطع",
@@ -109,10 +110,11 @@ COPY: dict[str, dict[str, Any]] = {
         "mode_real": "آداپتور واقعی (ELM327)",
         "mode_sim": "شبیه‌سازی (بدون سخت‌افزار)",
         "sim_note": (
-            "آداپتور واقعی ELM327 هنوز پیاده‌سازی نشده است (برنامه Milestone 2). برای کار "
-            "بدون سخت‌افزار حالت شبیه‌سازی را انتخاب کنید."
+            "برای آداپتور واقعی ELM327، درگاه سریال آن را در نوار ابزار صریحاً انتخاب کنید "
+            "(جستجوی خودکار درگاه غیرفعال است). این آداپتور فقط می‌خواند و هنوز روی "
+            "سخت‌افزار واقعی اعتبارسنجی نشده است. بدون سخت‌افزار، حالت شبیه‌سازی را انتخاب کنید."
         ),
-        "adapter_unavailable": "آداپتور انتخاب‌شده در این نسخه در دسترس نیست:\n{0}",
+        "adapter_unavailable": "آداپتور انتخاب‌شده آماده نیست:\n{0}",
         "connection_failed": "اتصال برقرار نشد:\n{0}",
         "recording_failed": "شروع ضبط ناموفق بود:\n{0}",
         "save_dialog_title": "ذخیره داده‌های زنده",
@@ -150,8 +152,9 @@ COPY: dict[str, dict[str, Any]] = {
         },
         "port": "Port",
         "refresh_ports": "Refresh the port list",
-        "auto": "Auto",
+        "auto": "— select a port —",
         "connect": "CONNECT",
+        "connecting": "CONNECTING…",
         "disconnect": "DISCONNECT",
         "connected": "Connected",
         "idle": "Offline",
@@ -222,10 +225,11 @@ COPY: dict[str, dict[str, Any]] = {
         "mode_real": "Real adapter (ELM327)",
         "mode_sim": "Simulation (no hardware)",
         "sim_note": (
-            "The real ELM327 adapter is not implemented yet (planned for milestone 2). Use "
-            "simulation mode to work without hardware."
+            "For a real ELM327 adapter, select its serial port explicitly in the toolbar "
+            "(automatic port probing is disabled). The adapter only reads and has not been "
+            "validated on real hardware yet. Without hardware, use simulation mode."
         ),
-        "adapter_unavailable": "The selected adapter is not available in this build:\n{0}",
+        "adapter_unavailable": "The selected adapter is not ready:\n{0}",
         "connection_failed": "Connection failed:\n{0}",
         "recording_failed": "Recording could not be started:\n{0}",
         "save_dialog_title": "Save live data",

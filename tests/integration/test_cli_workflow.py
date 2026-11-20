@@ -21,7 +21,7 @@ def test_version_works_without_configuration(capsys: pytest.CaptureFixture[str])
 def test_adapters_lists_status(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["adapters"]) == 0
     out = capsys.readouterr().out
-    assert "declared adapters: 3 (1 implemented)" in out
+    assert "declared adapters: 3 (2 implemented)" in out
     assert "elm327" in out
     assert "NOT implemented" in out
 
@@ -73,8 +73,13 @@ def test_diagnose_accepts_an_explicit_parameter_list(capsys: pytest.CaptureFixtu
 def test_declared_but_unimplemented_adapter_fails_with_a_message(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert main(["diagnose", "--adapter", "elm327"]) == 1
+    assert main(["diagnose", "--adapter", "can-bench"]) == 1
     assert "not implemented" in capsys.readouterr().err
+
+
+def test_elm327_without_a_port_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["diagnose", "--adapter", "elm327"]) == 2
+    assert "explicit serial port" in capsys.readouterr().err
 
 
 def test_unknown_adapter_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:

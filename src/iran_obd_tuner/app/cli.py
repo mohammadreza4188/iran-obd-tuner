@@ -6,7 +6,8 @@ Commands:
 * ``adapters`` — every declared adapter and whether it is implemented.
 * ``config``   — resolved settings and where they came from.
 * ``diagnose`` — run one read-only diagnostic session and print or save the report
-  (uses the simulated adapter by default; no vehicle is required).
+  (uses the simulated adapter by default; no vehicle is required). A real adapter is used
+  with ``--adapter elm327 --port COM3``.
 
 Output is ASCII English so that it stays readable in any terminal, in logs and in CI.
 Persian language output belongs to the future UI layer, not to the CLI.
@@ -84,7 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--adapter",
         default=None,
         metavar="NAME",
-        help="adapter to use, overriding the configured one (e.g. mock)",
+        help="adapter to use, overriding the configured one (e.g. mock, elm327)",
+    )
+    diagnose.add_argument(
+        "--port",
+        default=None,
+        metavar="PORT",
+        help="serial port of a real adapter, overriding 'serial_port' (e.g. COM3)",
     )
     diagnose.add_argument(
         "--pids",
@@ -202,6 +209,8 @@ def _cmd_diagnose(args: argparse.Namespace, settings: AppSettings) -> int:
 
     if args.adapter:
         settings = replace(settings, adapter=args.adapter)
+    if args.port:
+        settings = replace(settings, serial_port=args.port)
 
     application = Application.from_settings(settings)
     report = application.diagnose(pids=pids, read_vin=not args.no_vin)

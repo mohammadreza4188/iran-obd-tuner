@@ -38,7 +38,7 @@ python -m iran_obd_tuner diagnose
 | extra | محتوا | چه زمانی |
 |---|---|---|
 | `dev` | pytest, ruff | همیشه (برای همه اعضا) |
-| `obd` | بسته python-OBD (نام PyPI: `obd`)، pyserial | کار روی آداپتور واقعی ELM327 (فاز ۱) |
+| `obd` | pyserial | آداپتور واقعی ELM327 (درایور خود پروژه؛ python-OBD دیگر استفاده نمی‌شود) |
 | `can` | python-can | کار روی CAN (فاز ۲+) |
 | `bench` | udsoncan, crcmod | کار روی Bench/UDS و چک‌سام (فاز ۴+) |
 | `gui` | PySide6, pyqtgraph | کار روی رابط گرافیکی (فاز ۱) |
@@ -115,10 +115,20 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
   `tests/unit/test_i18n.py`). اگر یکی از این‌ها شکست خورد، کد را اصلاح کنید، نه قاعده را؛ مگر
   اینکه تغییر قاعده در `docs/architecture.md` تصمیم‌گیری و مستند شده باشد.
 
+### آداپتور ELM327: تست بدون سخت‌افزار
+
+`Elm327Adapter` فقط از یک `hardware.transport.Transport` استفاده می‌کند. در تست، `transport_factory` یک
+`ScriptedTransport` (fixture `scripted_transport` در `tests/conftest.py`) برمی‌گرداند که برای هر دستور یک
+پاسخ متنی ثبت‌شده می‌دهد و همه دستورهای ارسالی را در `written` نگه می‌دارد. اسکریپت پایه `can_vehicle_script` از
+مثال‌های datasheet ساخته شده است. برای پاسخ جدید، رشته پاسخ را دقیقاً همان‌طور که ELM327 چاپ می‌کند (بدون
+`>`) بنویسید و منبعش را در کامنت ذکر کنید. تجزیه پاسخ‌ها در `hardware/elm327_protocol.py` بدون I/O است و
+مستقیم با `tests/unit/test_elm327_protocol.py` تست می‌شود. دستور جدید فقط وقتی ارسال می‌شود که در
+`check_command_allowed` مجاز شده باشد؛ افزودن هر چیزی جز خواندن به این فهرست نیازمند تأیید صریح است.
+
 ### داشبورد: مسیر داده
 
 پنجره هیچ‌وقت آداپتور نمی‌سازد. `app/dashboard.py` (`AppDashboardBackend`) حالت «شبیه‌سازی» را
-به آداپتور mock با `MockScenario.drive_cycle()` و حالت «واقعی» را به `elm327` (فعلاً پیاده‌نشده)
+به آداپتور mock با `MockScenario.drive_cycle()` و حالت «واقعی» را به `elm327` روی درگاه انتخاب‌شده
 وصل می‌کند و یک `diagnostics.live_data.LiveDataSession` برمی‌گرداند. رشته جدید رابط کاربری را
 در هر دو زبان در `ui/i18n.py` اضافه کنید؛ متن ثابت داخل ویجت ننویسید.
 
@@ -169,8 +179,10 @@ extras سخت‌افزاری/گرافیکی در CI نصب **نمی‌شوند**
 | `configuration file not found: config/local.toml` | فایل محلی نساخته‌اید ولی `--config` داده‌اید | `cp config/example.toml config/local.toml` |
 | `unknown key(s) in ...` | خطای تایپی در کلید TOML | مقایسه با `config/example.toml` |
 | `unknown adapter '...'` | نام آداپتور اشتباه | `iran-obd-tuner adapters` |
-| `adapter 'elm327' is declared but not implemented` | فاز ۱ پیاده نشده | استفاده از `mock` |
-| نصب بسته OBD شکست می‌خورد | نام درست روی PyPI `obd` است، نه `python-obd` | از `pip install -e ".[obd]"` استفاده کنید (نام در `requirements.txt` توضیح داده شده) |
+| `the elm327 adapter needs an explicit serial port` | درگاه انتخاب نشده | `--port COM3` یا `serial_port` در `config/local.toml` |
+| `did not identify as an ELM327` | دستگاه روی آن درگاه ELM327 نیست | درگاه درست را از فهرست انتخاب کنید |
+| `UNABLE TO CONNECT` / `NO DATA` روی `01 00` | سوییچ خودرو باز نیست یا پروتکل پشتیبانی نمی‌شود | سوییچ را باز کنید و دوباره وصل شوید |
+| `pyserial is not installed` | extra نصب نشده | `pip install -e ".[obd]"` |
 | `ModuleNotFoundError: PySide6` هنگام اجرای GUI | extras نصب نشده | `python -m pip install -e ".[gui]"` (CLI و تست‌ها بدون آن هم کار می‌کنند) |
 | پنجره GUI در سرور/CI باز نمی‌شود | نبود نمایشگر | `QT_QPA_PLATFORM=offscreen` را ست کنید |
 | نصب PySide6 روی Windows شکست می‌خورد | نبود wheel مناسب نسخه پایتون | اجرای `pip install "PySide6>=6.6.0"` با نسخه پایتون پیشنهادی خود بسته |

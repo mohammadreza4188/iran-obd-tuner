@@ -37,16 +37,19 @@ def interpret_trouble_code(code: str, knowledge: KnowledgeRepository | None) -> 
     return TroubleCode.from_code(code, definition)
 
 
-def vehicle_info_for(adapter_info: AdapterInfo, vin: str | None) -> VehicleInfo:
+def vehicle_info_for(adapter: ObdAdapter, vin: str | None) -> VehicleInfo:
     """Build the vehicle identification from what an adapter reported.
 
+    ``protocol`` is the protocol negotiated on the connection
+    (:attr:`ObdAdapter.active_protocol`), never a guess from the adapter's capabilities;
     ``simulated`` comes from the adapter's explicit declaration, never from its kind.
     """
+    info: AdapterInfo = adapter.info
     return VehicleInfo(
         vin=vin,
-        protocol=adapter_info.protocols[0] if adapter_info.protocols else None,
-        adapter_name=adapter_info.name,
-        simulated=adapter_info.simulated,
+        protocol=adapter.active_protocol,
+        adapter_name=info.name,
+        simulated=info.simulated,
     )
 
 
@@ -145,7 +148,7 @@ class DiagnosticService:
         trouble_codes = tuple(self.describe_trouble_code(code) for code in raw_codes)
         adapter_info = self._adapter.info
         report = DiagnosticReport(
-            vehicle=vehicle_info_for(adapter_info, vin),
+            vehicle=vehicle_info_for(self._adapter, vin),
             adapter=adapter_info,
             measurements=batch.measurements,
             supported_pids=supported,

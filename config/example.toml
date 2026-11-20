@@ -12,12 +12,14 @@
 # read-only diagnostics. No option in this file can enable ECU write or calibration operations.
 
 # Adapter to use. See `iran-obd-tuner adapters` for declared adapters and their status.
-# "mock" is the only implemented adapter in this snapshot.
+# Implemented: "mock" (simulated) and "elm327" (read-only, needs serial_port; not yet
+# validated on real hardware).
 # Env: IRAN_OBD_TUNER_ADAPTER
 adapter = "mock"
 
-# Serial port of a real adapter (only relevant for adapters that are declared but not
-# implemented yet, e.g. "elm327"). Leave unset for the mock adapter.
+# Serial port of a real adapter. Required for "elm327": the port is never probed
+# automatically, because probing would send commands to unknown devices. Leave unset for
+# the mock adapter.
 # Env: IRAN_OBD_TUNER_SERIAL_PORT
 # serial_port = "COM3"
 

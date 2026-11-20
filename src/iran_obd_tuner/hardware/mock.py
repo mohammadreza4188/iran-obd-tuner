@@ -318,6 +318,11 @@ class MockObdAdapter(ObdAdapter):
         return self._scenario
 
     @property
+    def active_protocol(self) -> str | None:
+        """The scenario's (simulated) protocol."""
+        return self._scenario.protocol
+
+    @property
     def info(self) -> AdapterInfo:
         return AdapterInfo(
             name="mock",

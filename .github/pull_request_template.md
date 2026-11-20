@@ -11,11 +11,11 @@
 
 - [ ] `app/` — entry points, wiring, CLI
 - [ ] `core/` — config, logging, models, safety, catalogues
-- [ ] `hardware/` — adapter interfaces/implementations (interfaces only today)
+- [ ] `hardware/` — adapter interfaces and implementations (mock, read-only ELM327)
 - [ ] `diagnostics/` — diagnostic workflow and models
 - [ ] `tuning/` — bench/calibration interfaces
 - [ ] `database/` — knowledge database
-- [ ] `ui/` — desktop user interface (not implemented yet)
+- [ ] `ui/` — PySide6 desktop dashboard
 - [ ] tests
 - [ ] docs / tooling / project metadata
 

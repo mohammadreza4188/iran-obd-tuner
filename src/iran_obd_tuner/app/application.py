@@ -41,7 +41,16 @@ class Application:
     ) -> None:
         self._settings = settings
         self._log = get_logger("app")
-        self._adapter = adapter if adapter is not None else create_adapter(settings.adapter)
+        self._adapter = (
+            adapter
+            if adapter is not None
+            else create_adapter(
+                settings.adapter,
+                serial_port=settings.serial_port,
+                serial_baudrate=settings.serial_baudrate,
+                command_timeout_s=settings.command_timeout_s,
+            )
+        )
         self._knowledge = (
             knowledge if knowledge is not None else JsonKnowledgeRepository(settings.knowledge_dir)
         )

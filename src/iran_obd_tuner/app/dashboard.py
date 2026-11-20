@@ -5,11 +5,10 @@ Implements :class:`iran_obd_tuner.ui.backend.DashboardBackend`: this is where th
 
 * Simulation → the mock adapter with :meth:`MockScenario.drive_cycle` (time-varying values,
   ``AdapterInfo.simulated = True``).
-* Real adapter → the ``elm327`` adapter. It is declared but **not implemented** in this
-  build, so the request fails with
-  :class:`~iran_obd_tuner.core.exceptions.AdapterNotImplementedError`. It never falls back
-  to the simulator. The selected port is accepted now so the UI contract does not change
-  when the ELM327 adapter lands (milestone 2); it is not used yet.
+* Real adapter → the read-only ``elm327`` adapter on the port the user selected, with the
+  baud rate and command timeout from the settings. Without an explicit port the request
+  fails with :class:`~iran_obd_tuner.core.exceptions.ConfigurationError` (no automatic
+  probing of serial ports). It never falls back to the simulator.
 """
 
 from __future__ import annotations
@@ -64,9 +63,12 @@ class AppDashboardBackend:
         if simulation:
             adapter = create_adapter(MOCK_ADAPTER_NAME, mock_scenario=MockScenario.drive_cycle())
         else:
-            # Raises AdapterNotImplementedError until the ELM327 adapter exists; `port` will
-            # be handed to it then.
-            adapter = create_adapter(ELM327_ADAPTER_NAME)
+            adapter = create_adapter(
+                ELM327_ADAPTER_NAME,
+                serial_port=port,
+                serial_baudrate=self._settings.serial_baudrate,
+                command_timeout_s=self._settings.command_timeout_s,
+            )
         return LiveDataSession(
             adapter,
             self._knowledge,
