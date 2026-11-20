@@ -604,3 +604,105 @@ def test_claim_model_refuses_the_same_violations_in_code() -> None:
         Claim("x", ConfidenceLevel.VERIFIED, source="s")
     with pytest.raises(ValueError, match="verify"):
         Claim("x", ConfidenceLevel.UNVERIFIED, source="s")
+
+
+# --------------------------------------------------------------------------- #
+# verified claims vs. their Field Evidence Bundles
+# --------------------------------------------------------------------------- #
+
+#: claim field -> key in ``observed_values`` (equality of the formatted value).
+_EQUAL_FIELDS = {
+    "obd_physical_layer": "obd_physical_layer",
+    "can_bitrate_bps": "can_bitrate_bps",
+    "request_id": "request_id",
+    "response_id": "response_id",
+    "supported_pids": "supported_pids",
+}
+#: pattern field -> observed DID text the glob must match.
+_GLOB_FIELDS = {
+    "part_number_patterns": "part_number",
+    "software_version_patterns": "software_version",
+    "system_name_patterns": "system_name",
+}
+
+
+def verified_claim_problems(kb: JsonVehicleKnowledgeBase, root: Path) -> list[str]:
+    """Every verified claim must equal what its (intact, non-simulated) bundle observed."""
+    from fnmatch import fnmatchcase
+
+    from iran_obd_tuner.core.exceptions import EvidenceExportError
+    from iran_obd_tuner.core.knowledge import format_claim_value
+    from iran_obd_tuner.diagnostics.evidence_export import load_bundle, observed_values
+
+    problems: list[str] = []
+    for where, field, claim in _all_claims(kb):
+        if claim.confidence is not ConfidenceLevel.VERIFIED:
+            continue
+        assert claim.evidence is not None
+        label = f"{where}:{field}"
+        try:
+            bundle = load_bundle(root / claim.evidence.bundle)
+        except EvidenceExportError as exc:
+            problems.append(f"{label}: {exc}")
+            continue
+        if bundle.sha256 != claim.evidence.sha256:
+            problems.append(f"{label}: sha256 differs from the bundle")
+        if bundle.simulated or not bundle.document.get("usable_for_verification"):
+            problems.append(f"{label}: the bundle is simulated")
+        observed = observed_values(bundle.document)
+        if field in _EQUAL_FIELDS:
+            shown = format_claim_value(field, claim.value)
+            if shown not in observed.get(_EQUAL_FIELDS[field], set()):
+                problems.append(f"{label}: {shown} was not observed in the bundle")
+        elif field in _GLOB_FIELDS:
+            texts = observed.get(_GLOB_FIELDS[field], set())
+            if not any(fnmatchcase(t.upper(), str(claim.value).upper()) for t in texts):
+                problems.append(f"{label}: no observed value matches {claim.value}")
+        elif field == "dids":
+            if f"{claim.value.did:04X}" not in observed.get("dids", set()):
+                problems.append(f"{label}: DID {claim.value.did:04X} did not answer")
+        elif not claim.notes:
+            problems.append(f"{label}: not machine-checkable; notes must explain the evidence")
+    return problems
+
+
+def test_bundled_verified_claims_match_their_evidence(bundled: JsonVehicleKnowledgeBase) -> None:
+    assert verified_claim_problems(bundled, REPO_ROOT) == []
+
+
+def _evidence_root(tmp_path: Path, *, simulated: bool, layer: str) -> Path:
+    from iran_obd_tuner.core.models import VehicleInfo
+    from iran_obd_tuner.diagnostics.evidence_export import build_evidence_bundle, write_bundle
+    from iran_obd_tuner.hardware.elm327_protocol import PROTOCOL_NAMES
+
+    bundle = build_evidence_bundle(
+        tool_version="test",
+        vehicle_info=VehicleInfo(protocol=PROTOCOL_NAMES["6"], simulated=simulated),
+    )
+    write_bundle(tmp_path / "evidence" / "feb-test.json", bundle)
+    pack = json.loads(FIXTURE_PACK.read_text(encoding="utf-8"))
+    pack["sources"].append({"id": "src.field_test", "kind": "field_evidence", "title": "Bench"})
+    _alpha(pack)["obd_physical_layer"] = {
+        "value": layer,
+        "confidence": "verified",
+        "source": "src.field_test",
+        "evidence": {"bundle": "evidence/feb-test.json", "sha256": bundle.sha256},
+    }
+    _write(tmp_path, pack)
+    return tmp_path
+
+
+def test_a_verified_claim_backed_by_a_real_bundle_passes(tmp_path: Path) -> None:
+    root = _evidence_root(tmp_path, simulated=False, layer="iso_15765_4_can_11_500")
+    kb = JsonVehicleKnowledgeBase(root, include_bundled=False)
+    assert verified_claim_problems(kb, root) == []
+
+
+def test_verified_claim_problems_are_found(tmp_path: Path) -> None:
+    root = _evidence_root(tmp_path, simulated=True, layer="iso_15765_4_can_29_500")
+    kb = JsonVehicleKnowledgeBase(root, include_bundled=False)
+    problems = verified_claim_problems(kb, root)
+    assert any("simulated" in p for p in problems)
+    assert any("was not observed" in p for p in problems)
+    (root / "evidence" / "feb-test.json").write_text("{}", encoding="utf-8")
+    assert any("kind" in p for p in verified_claim_problems(kb, root))

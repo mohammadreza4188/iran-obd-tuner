@@ -242,3 +242,78 @@ def test_the_simulated_ecu_server_is_only_started_by_the_virtual_sim_link() -> N
             ):
                 creators.append(path.relative_to(PACKAGE_DIR).as_posix())
     assert creators == ["hardware/uds_link.py"]
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 5: vehicle knowledge base, matcher and evidence export
+# --------------------------------------------------------------------------- #
+
+#: Passive modules: they may take protocol *names* from hardware, never a transport.
+PASSIVE_MODULES = ("diagnostics/vehicle_matcher.py", "diagnostics/evidence_export.py")
+_WRITE_CALLS = {"write_text", "write_bytes", "mkdir", "unlink", "rmdir", "touch", "rename"}
+
+
+def _hardware_names(relative: str) -> set[tuple[str, str]]:
+    tree = ast.parse((PACKAGE_DIR / relative).read_text(encoding="utf-8"))
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(f"{ROOT}.hardware"):
+            names |= {(node.module or "", alias.name) for alias in node.names}
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith(f"{ROOT}.hardware"), (relative, alias.name)
+    return names
+
+
+def test_matcher_and_evidence_export_cannot_talk_to_a_vehicle() -> None:
+    allowed = {(f"{ROOT}.hardware.elm327_protocol", "PROTOCOL_NAMES")}
+    for relative in PASSIVE_MODULES:
+        assert _hardware_names(relative) <= allowed, relative
+    assert _hardware_names("diagnostics/vehicle_matcher.py") == allowed  # the scan works
+
+
+def test_the_knowledge_database_never_writes_files() -> None:
+    offenders = []
+    for path in sorted((PACKAGE_DIR / "database").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr in _WRITE_CALLS:
+                offenders.append(f"{path.name}:{node.lineno} {func.attr}")
+            if isinstance(func, ast.Name) and func.id == "open":
+                modes = list(node.args[1:2]) + [k.value for k in node.keywords if k.arg == "mode"]
+                for mode in modes:
+                    if not (
+                        isinstance(mode, ast.Constant) and set(str(mode.value)) <= {"r", "b", "t"}
+                    ):
+                        offenders.append(f"{path.name}:{node.lineno} open")
+    assert offenders == []
+
+
+def test_milestone_5_did_not_widen_the_request_allowlists() -> None:
+    """Manufacturer identifiers in the packs are knowledge only: nothing can send them."""
+    from iran_obd_tuner.core.exceptions import SafetyGuardError
+    from iran_obd_tuner.hardware.elm327_protocol import check_command_allowed
+    from iran_obd_tuner.hardware.uds import ALLOWED_REQUESTS, check_request_allowed
+
+    assert set(ALLOWED_REQUESTS) == {0x10, 0x3E, 0x22, 0x19}
+    for request in (b"\x21\x01", b"\x2e\xf1\x90\x00", b"\x27\x01"):
+        try:
+            check_request_allowed(request)
+        except SafetyGuardError:
+            continue
+        raise AssertionError(f"UDS allowlist accepts {request.hex()}")
+    for command in ("2101", "22F190", "04", "1001"):
+        try:
+            check_command_allowed(command)
+        except SafetyGuardError:
+            continue
+        raise AssertionError(f"ELM327 allowlist accepts {command}")
+
+
+def test_vehicle_packs_are_data_only() -> None:
+    """Packs ship as JSON next to the code that validates them, never as Python."""
+    data = PACKAGE_DIR / "database" / "data" / "vehicles"
+    names = sorted(p.name for p in data.iterdir() if p.is_file())
+    assert names and all(name.endswith(".json") for name in names)

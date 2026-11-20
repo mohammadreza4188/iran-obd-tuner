@@ -67,3 +67,32 @@ def test_the_server_only_opens_the_virtual_interface(monkeypatch: pytest.MonkeyP
     server.stop()
 
     assert opened == ["virtual"]
+
+
+def test_evidence_bundle_redacts_the_vin_from_real_iso_tp_frames(channel_name: str) -> None:
+    """The simulated VIN (F190, multi-frame with responsePending) must not survive export."""
+    from iran_obd_tuner.core.traffic import TrafficLog
+    from iran_obd_tuner.diagnostics.ecu_identification import identify_over_link
+    from iran_obd_tuner.diagnostics.evidence_export import (
+        REDACTED_VIN_RESPONSE,
+        build_evidence_bundle,
+    )
+    from iran_obd_tuner.hardware.uds_link import UdsLink, UdsLinkConfig
+
+    log = TrafficLog()
+    config = UdsLinkConfig(interface="virtual-sim", channel=channel_name)
+    with UdsLink(config, traffic_log=log) as link:
+        result = identify_over_link(link)
+    assert result.vin == "SIMULATEDVIN00004"
+    raw = "".join(e.text.replace(" ", "") for e in log.snapshot())
+    assert "4E3030303034" in raw  # the serial ("N00004") really is in the captured frames
+
+    bundle = build_evidence_bundle(
+        tool_version="test", identification=result, traffic=log.snapshot()
+    )
+    text = bundle.to_json()
+    assert "SIMULATEDVIN00004" not in text
+    assert "4E3030303034" not in text.replace(" ", "")
+    assert REDACTED_VIN_RESPONSE in text
+    assert bundle.document["simulated"] is True
+    assert bundle.document["usable_for_verification"] is False
