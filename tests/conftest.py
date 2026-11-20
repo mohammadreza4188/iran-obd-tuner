@@ -77,6 +77,55 @@ def fake_clock() -> FakeClock:
 
 
 # --------------------------------------------------------------------------- #
+# CAN: synchronous fake bus with a fake clock (no python-can, no threads)
+# --------------------------------------------------------------------------- #
+
+
+class FakeCanBus:
+    """In-memory :class:`CanBus`: records sent frames, replays scripted ones.
+
+    ``responder(frame)`` is called for every sent frame and may return frames that become
+    receivable, which is how a test plays the other side of an ISO-TP exchange without
+    threads. Waiting for a frame that never comes advances the fake clock to the deadline.
+    """
+
+    def __init__(self, clock: FakeClock, responder=None, *, simulated: bool = True) -> None:
+        self.clock = clock
+        self.responder = responder
+        self.sent: list = []
+        self.incoming: list = []
+        self.simulated = simulated
+        self.closed = False
+
+    def send(self, frame) -> None:
+        self.sent.append(frame)
+        if self.responder is not None:
+            self.incoming.extend(self.responder(frame) or ())
+
+    def recv(self, timeout_s: float):
+        if self.incoming:
+            return self.incoming.pop(0)
+        self.clock.advance(timeout_s)
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    def sleep(self, seconds: float) -> None:
+        self.clock.advance(seconds)
+
+
+@pytest.fixture
+def fake_can_bus(fake_clock):
+    """Factory: ``fake_can_bus(responder=None)`` -> FakeCanBus sharing ``fake_clock``."""
+
+    def build(responder=None, *, simulated: bool = True) -> FakeCanBus:
+        return FakeCanBus(fake_clock, responder, simulated=simulated)
+
+    return build
+
+
+# --------------------------------------------------------------------------- #
 # ELM327: scripted serial transport (no hardware, no serial port)
 # --------------------------------------------------------------------------- #
 
