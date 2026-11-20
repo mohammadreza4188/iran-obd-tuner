@@ -59,12 +59,16 @@ class PidReading:
         status: Outcome of the read.
         measurement: The decoded measurement; only present when ``status`` is ``OK``.
         detail: Error message of a failed read, for logs and tooltips.
+        sampled_at_s: Monotonic time (seconds) when this parameter's read finished; used by
+            the physics analytics, which need per-parameter timing rather than the time of
+            the whole poll. ``None`` when unknown (e.g. freeze frame values).
     """
 
     pid: str
     status: PidStatus
     measurement: Measurement | None = None
     detail: str | None = None
+    sampled_at_s: float | None = None
 
     def __post_init__(self) -> None:
         if (self.status is PidStatus.OK) != (self.measurement is not None):

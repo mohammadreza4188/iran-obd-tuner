@@ -23,6 +23,7 @@ after a disconnect are dropped. Not implemented: freeze frames, reports.
 from __future__ import annotations
 
 import html
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QTabWidget,
     QVBoxLayout,
@@ -67,6 +69,7 @@ from iran_obd_tuner.ui.diagnostics_view import DiagnosticsView
 from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
 from iran_obd_tuner.ui.icon import build_icon
+from iran_obd_tuner.ui.performance_view import FAST_POLL_PIDS, PerformanceView
 from iran_obd_tuner.ui.safety_modal import SafetyModal
 from iran_obd_tuner.ui.traffic_view import TrafficView
 from iran_obd_tuner.ui.worker import BackgroundRunner
@@ -319,11 +322,12 @@ class MainWindow(QMainWindow):
         tab_row = QHBoxLayout()
         tab_row.setSpacing(8)
         self.tab_buttons: list[QPushButton] = []
-        self.tab_ids = ["dashboard", "graph", "diag", "ident", "bench", "settings", "log"]
+        self.tab_ids = ["dashboard", "graph", "diag", "perf", "ident", "bench", "settings", "log"]
         self.tab_icons = {
             "dashboard": "📊",
             "graph": "📈",
             "diag": "⚠️",
+            "perf": "⏱️",
             "ident": "📡",
             "bench": "🛠️",
             "settings": "⚙️",
@@ -430,6 +434,13 @@ class MainWindow(QMainWindow):
         self.diag_view.clear_btn.clicked.connect(self._clear_dtc)
         self.diag_view.set_connected(False)
         self.stack.addWidget(self.diag_view)
+
+        # Performance: 0-100 timer and virtual dyno (passive, estimated)
+        self.perf_view = PerformanceView(self._backend.dyno_parameters)
+        perf_scroll = QScrollArea()  # the tab is taller than small windows
+        perf_scroll.setWidgetResizable(True)
+        perf_scroll.setWidget(self.perf_view)
+        self.stack.addWidget(perf_scroll)
 
         # Identification
         ident_page = QWidget()
@@ -559,6 +570,7 @@ class MainWindow(QMainWindow):
         )
         self.sim_banner.setText(t["sim_banner"])
         self.diag_view.set_language(self.lang)
+        self.perf_view.set_language(self.lang)
         self.traffic_view.set_language(self.lang)
         self.log_tabs.setTabText(0, t["log_tab_events"])
         self.log_tabs.setTabText(1, t["log_tab_traffic"])
@@ -698,6 +710,7 @@ class MainWindow(QMainWindow):
         self.sim_banner.setVisible(session.simulated)
         self._update_status_pill()
         self.diag_view.set_connected(True)
+        self.perf_view.set_connected(True)
         self._refresh_dtc()
         self._tick()
         self.timer.start()
@@ -741,6 +754,7 @@ class MainWindow(QMainWindow):
         self._restore_idle_controls()
         self._render_snapshot()
         self.diag_view.set_connected(False)
+        self.perf_view.set_connected(False)
         self._render_mil()
         self._render_identification()
         if session is not None:
@@ -752,8 +766,9 @@ class MainWindow(QMainWindow):
             return  # never queue a second poll behind a slow one
         self._poll_pending = True
         generation = self._generation
+        pids = FAST_POLL_PIDS if self.perf_view.wants_fast_poll else DASHBOARD_PIDS
         self._runner.submit(
-            lambda: session.poll(DASHBOARD_PIDS),
+            lambda: session.poll(pids),
             lambda snapshot: self._on_snapshot(generation, snapshot),
             lambda exc: self._on_poll_failed(generation, exc),
         )
@@ -764,6 +779,7 @@ class MainWindow(QMainWindow):
         self._poll_pending = False
         self._last_snapshot = snapshot
         self._render_snapshot()
+        self.perf_view.feed_snapshot(snapshot, time.monotonic())
         self.spark.push(snapshot.value_for("010C"), snapshot.value_for("010D"))
         if self.recorder.recording:
             self.recorder.write(snapshot)
@@ -783,7 +799,12 @@ class MainWindow(QMainWindow):
             card = self.gauges[spec.key]
             reading = None if snapshot is None else snapshot.reading_for(spec.pid)
             if reading is None:
-                card.set_unavailable("" if snapshot is None else t["pid_status"]["no_data"])
+                if snapshot is None:
+                    card.set_unavailable("")
+                elif set(FAST_POLL_PIDS) >= {r.pid for r in snapshot.readings}:
+                    card.set_unavailable(t["pid_status"]["fast_mode"])  # not polled right now
+                else:
+                    card.set_unavailable(t["pid_status"]["no_data"])
             elif reading.measurement is not None:
                 card.set_value(reading.measurement.value)
             else:

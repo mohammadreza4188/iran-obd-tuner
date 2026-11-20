@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Protocol
 
 from iran_obd_tuner.core.traffic import TrafficLog
+from iran_obd_tuner.diagnostics.dyno import VehicleParameters
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 
 __all__ = ["DashboardBackend"]
@@ -22,6 +23,11 @@ __all__ = ["DashboardBackend"]
 
 class DashboardBackend(Protocol):
     """Services the dashboard window uses."""
+
+    @property
+    def dyno_parameters(self) -> VehicleParameters:
+        """Default vehicle parameters of the virtual dyno (from the settings)."""
+        ...
 
     @property
     def traffic_log(self) -> TrafficLog:

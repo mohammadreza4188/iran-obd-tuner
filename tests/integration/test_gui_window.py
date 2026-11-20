@@ -32,7 +32,7 @@ from iran_obd_tuner.app.dashboard import AppDashboardBackend  # noqa: E402
 from iran_obd_tuner.core.config import AppSettings  # noqa: E402
 from iran_obd_tuner.core.exceptions import AdapterConnectionError  # noqa: E402
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository  # noqa: E402
-from iran_obd_tuner.diagnostics.live_data import LiveDataSession  # noqa: E402
+from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot  # noqa: E402
 from iran_obd_tuner.hardware.base import ObdAdapter  # noqa: E402
 from iran_obd_tuner.hardware.elm327 import Elm327Adapter  # noqa: E402
 from iran_obd_tuner.hardware.mock import FailureMode, MockObdAdapter, MockScenario  # noqa: E402
@@ -144,7 +144,7 @@ def _log_texts(window: MainWindow) -> list[str]:
 def test_window_builds_offline(window: MainWindow, backend: TestBackend) -> None:
     assert window.windowTitle() == COPY["fa"]["title"]
     assert len(window.gauges) == 8
-    assert len(window.tab_buttons) == 7
+    assert len(window.tab_buttons) == 8
     assert window.connected is False
     assert window.timer.isActive() is False
     assert backend.sessions_created == 0  # constructing the window opens nothing
@@ -551,3 +551,115 @@ def test_traffic_pause_clear_and_copy(window: MainWindow, qt_app: QApplication) 
     view.clear_btn.click()
     assert view.lines() == []
     assert len(window._backend.traffic_log) == 0
+
+
+# --------------------------------------------------------------------------- #
+# M3 part C: performance tab (0-100 timer, virtual dyno, fast polling)
+# --------------------------------------------------------------------------- #
+
+
+def _speed_snapshot(t: float, speed: float, rpm: float = 3000.0) -> LiveSnapshot:
+    from iran_obd_tuner.core.models import Measurement, Unit
+    from iran_obd_tuner.diagnostics.models import PidReading, PidStatus
+
+    def reading(pid: str, value: float, unit: Unit) -> PidReading:
+        m = Measurement(pid=pid, name=pid, value=value, unit=unit)
+        return PidReading(pid, PidStatus.OK, measurement=m, sampled_at_s=t)
+
+    return LiveSnapshot(
+        readings=(
+            reading("010C", rpm, Unit.RPM),
+            reading("010D", speed, Unit.KILOMETRE_PER_HOUR),
+            reading("0111", 100.0, Unit.PERCENT),
+        ),
+        simulated=True,
+    )
+
+
+def test_performance_tab_timer_flow(window: MainWindow) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    view = window.perf_view
+    t = COPY["en"]
+    assert view.arm_btn.isEnabled() is False  # needs a connection
+
+    view.set_connected(True)
+    view.arm_timer()
+    assert view.timer_state_label.text() == t["timer_state"]["armed"]
+    for i, speed in enumerate([0, 0, 12, 25, 38, 50, 62, 75, 87, 99, 104]):
+        view.feed_snapshot(_speed_snapshot(i * 0.5, float(speed)), i * 0.5)
+
+    assert view.timer_state_label.text() == t["timer_state"]["completed"]
+    assert view.timer_result_label.text().startswith("0–60: ")
+    assert t["perf_simulated"] in view.timer_result_label.text()
+    assert "uncertainty ±" in view.timer_quality_label.text()
+
+
+def test_performance_tab_timer_abort_is_explained(window: MainWindow) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    view = window.perf_view
+    view.set_connected(True)
+    view.arm_timer()
+    for i, speed in enumerate([0, 20, 40, 30]):
+        view.feed_snapshot(_speed_snapshot(i * 0.5, float(speed)), i * 0.5)
+
+    assert view.timer_state_label.text() == "Aborted: speed dropped"
+
+
+def test_virtual_dyno_needs_a_curb_mass_and_then_plots(window: MainWindow) -> None:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "unit"))
+    import test_dyno as reference  # noqa: E402  (the synthetic reference pull)
+
+    window.lang_combo.setCurrentIndex(1)
+    view = window.perf_view
+    view.set_connected(True)
+    pull = reference.simulate_pull(rate_hz=4.0)
+
+    def record() -> None:
+        view.start_pull()
+        for s in pull:
+            view.feed_snapshot(_speed_snapshot(s.t, s.speed_kmh, s.rpm), s.t)
+        view.finish_pull()
+
+    record()  # no curb mass entered: refused, nothing invented
+    assert view.dyno_result is None
+    assert "curb mass" in view.dyno_status_label.text()
+
+    view.param_spins["curb_mass_kg"].setValue(1150.0)
+    record()
+    assert view.dyno_result is not None
+    assert view.chart.point_count > 10
+    assert "PS" in view.dyno_peaks_label.text()
+    assert COPY["en"]["perf_estimated"] in view.dyno_peaks_label.text()
+    assert view.dyno_warning.text() == COPY["en"]["dyno_warning"]
+
+
+def test_fast_polling_reads_fewer_parameters_and_says_so(window: MainWindow) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    window.perf_view.arm_timer()
+
+    window._tick()
+    settle(window)
+
+    coolant = window.gauges["coolant"].gauge
+    assert coolant.value is None
+    assert coolant.caption == COPY["en"]["pid_status"]["fast_mode"]
+    assert {r.pid for r in window._last_snapshot.readings} == {"010C", "010D", "0111"}
+
+    window.perf_view.fast_poll.setChecked(False)
+    window._tick()
+    settle(window)
+    assert window.gauges["coolant"].gauge.value is not None
+
+
+def test_disconnect_aborts_a_running_measurement(window: MainWindow) -> None:
+    _connect_simulation(window)
+    window.perf_view.arm_timer()
+
+    window.connect_btn.click()
+    settle(window)
+
+    assert window.perf_view.timer.state.value == "aborted"

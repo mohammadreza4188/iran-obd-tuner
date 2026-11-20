@@ -23,7 +23,7 @@ WINDOW_SOURCE = (UI_DIR / "main_window.py").read_text(encoding="utf-8")
 MODAL_SOURCE = (UI_DIR / "safety_modal.py").read_text(encoding="utf-8")
 VIEW_SOURCES = "".join(
     (UI_DIR / name).read_text(encoding="utf-8")
-    for name in ("diagnostics_view.py", "traffic_view.py")
+    for name in ("diagnostics_view.py", "traffic_view.py", "performance_view.py")
 )
 
 

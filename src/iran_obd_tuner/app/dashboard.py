@@ -16,8 +16,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from iran_obd_tuner.core.config import AppSettings
+from iran_obd_tuner.core.exceptions import ConfigurationError
 from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository, KnowledgeRepository
+from iran_obd_tuner.diagnostics.dyno import VehicleParameters
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 from iran_obd_tuner.hardware.mock import MockScenario
 from iran_obd_tuner.hardware.registry import (
@@ -49,11 +51,31 @@ class AppDashboardBackend:
         )
         # One log for the whole dashboard: every session's adapter records into it.
         self._traffic_log = TrafficLog()
+        try:
+            self._dyno_parameters = self._build_dyno_parameters()
+        except ValueError as exc:
+            raise ConfigurationError(f"invalid dyno_* setting: {exc}") from exc
 
     @property
     def settings(self) -> AppSettings:
         """Settings this backend was built from."""
         return self._settings
+
+    @property
+    def dyno_parameters(self) -> VehicleParameters:
+        return self._dyno_parameters
+
+    def _build_dyno_parameters(self) -> VehicleParameters:
+        s = self._settings
+        return VehicleParameters(
+            curb_mass_kg=s.dyno_curb_mass_kg,
+            extra_mass_kg=s.dyno_extra_mass_kg,
+            drag_coefficient=s.dyno_drag_coefficient,
+            frontal_area_m2=s.dyno_frontal_area_m2,
+            drivetrain_loss=s.dyno_drivetrain_loss,
+            rolling_resistance=s.dyno_rolling_resistance,
+            air_density_kg_m3=s.dyno_air_density_kg_m3,
+        )
 
     @property
     def traffic_log(self) -> TrafficLog:

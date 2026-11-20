@@ -20,7 +20,8 @@ State-changing requests are refused by the adapter's safety gate; no implementat
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -98,6 +99,8 @@ class LiveDataSession:
         adapter: Transport to use. Never connects at construction time.
         knowledge: Knowledge repository for trouble code descriptions (optional).
         connect_timeout_s: Seconds to wait for the connection to be established.
+        clock: Monotonic clock stamped on every reading (``PidReading.sampled_at_s``);
+            injectable so the analytics can be tested deterministically.
     """
 
     def __init__(
@@ -106,10 +109,12 @@ class LiveDataSession:
         knowledge: KnowledgeRepository | None = None,
         *,
         connect_timeout_s: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._adapter = adapter
         self._knowledge = knowledge
         self._connect_timeout_s = connect_timeout_s
+        self._clock = clock
         self._log = get_logger("diagnostics.live_data")
 
     @property
@@ -214,11 +219,15 @@ class LiveDataSession:
         except AdapterConnectionError:
             raise
         except (UnsupportedPidError, UnsupportedOperationError) as exc:
-            return PidReading(pid=pid, status=PidStatus.UNSUPPORTED, detail=str(exc))
+            status, detail = PidStatus.UNSUPPORTED, str(exc)
         except AdapterTimeoutError as exc:
             self._log.debug("no answer for %s: %s", pid, exc)
-            return PidReading(pid=pid, status=PidStatus.NO_RESPONSE, detail=str(exc))
+            status, detail = PidStatus.NO_RESPONSE, str(exc)
         except ProtocolError as exc:
             self._log.warning("malformed answer for %s: %s", pid, exc)
-            return PidReading(pid=pid, status=PidStatus.MALFORMED, detail=str(exc))
-        return PidReading(pid=pid, status=PidStatus.OK, measurement=measurement)
+            status, detail = PidStatus.MALFORMED, str(exc)
+        else:
+            return PidReading(
+                pid=pid, status=PidStatus.OK, measurement=measurement, sampled_at_s=self._clock()
+            )
+        return PidReading(pid=pid, status=status, detail=detail, sampled_at_s=self._clock())

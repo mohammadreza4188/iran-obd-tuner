@@ -77,7 +77,12 @@ class TrafficView(QWidget):
         return self._paused
 
     def set_language(self, lang: Lang) -> None:
-        self._lang = lang
+        if lang != self._lang:
+            self._lang = lang
+            if not self._paused:  # re-render so the simulated tag is in the new language
+                self.text.clear()
+                self._last_seq = 0
+                self.refresh()
         t = COPY[lang]
         self.pause_btn.setText(t["traffic_resume"] if self._paused else t["traffic_pause"])
         self.clear_btn.setText(t["traffic_clear"])

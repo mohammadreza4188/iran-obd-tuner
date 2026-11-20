@@ -30,6 +30,7 @@ COPY: dict[str, dict[str, Any]] = {
             "dashboard": "داشبورد",
             "graph": "نمودار زنده",
             "diag": "کدهای خطا",
+            "perf": "عملکرد",
             "ident": "شناسایی خودرو",
             "bench": "تیونینگ (Bench)",
             "settings": "تنظیمات",
@@ -72,6 +73,7 @@ COPY: dict[str, dict[str, Any]] = {
             "no_response": "بدون پاسخ",
             "malformed": "پاسخ نامعتبر",
             "no_data": "بدون داده",
+            "fast_mode": "متوقف (poll سریع)",
         },
         "dtc_title": "کدهای خطا",
         "dtc_note": "توضیح کدها از یک کاتالوگ عمومی و غیرمرجع (انگلیسی) می‌آید.",
@@ -177,6 +179,74 @@ COPY: dict[str, dict[str, Any]] = {
         ),
         "traffic_stats": "{0} خط، {1} خط قدیمی حذف‌شده (ظرفیت {2})",
         "traffic_sim_tag": "[شبیه‌سازی]",
+        "perf_fast_poll": (
+            "poll سریع هنگام اندازه‌گیری (فقط دور موتور، سرعت و دریچه گاز؛ دستور کمتر، نه بیشتر)"
+        ),
+        "perf_estimated": "تخمینی / محاسباتی",
+        "perf_simulated": "[داده شبیه‌سازی‌شده]",
+        "timer_title": "زمان‌سنج ۰ تا ۱۰۰ کیلومتر بر ساعت (تخمینی)",
+        "timer_arm": "آماده‌سازی",
+        "timer_reset": "ریست",
+        "timer_state": {
+            "idle": "غیرفعال — «آماده‌سازی» را بزنید",
+            "armed": "منتظر توقف کامل خودرو…",
+            "armed_at_standstill": "آماده — حرکت کنید",
+            "running": "در حال اندازه‌گیری…",
+            "completed": "تمام شد",
+            "aborted": "لغو شد: {0}",
+        },
+        "timer_abort": {
+            "speed_drop": "سرعت کم شد",
+            "sample_gap": "داده سرعت قطع شد",
+            "timeout": "بیش از حد طول کشید",
+            "disconnected": "اتصال قطع شد",
+        },
+        "timer_result": "۰ تا {0}: {1} ثانیه — ۰ تا {2}: {3} ثانیه — مسافت: {4} متر",
+        "timer_quality": "عدم‌قطعیت ±{0} ثانیه — بیشترین فاصله نمونه‌ها {1} ثانیه — {2} نمونه",
+        "timer_note": (
+            "بر اساس سرعتی که ECU گزارش می‌دهد (دقت ۱ km/h و چند نمونه در ثانیه)؛ با زمان‌سنج "
+            "دقیق یا GPS برابر نیست."
+        ),
+        "dyno_title": "دینوی مجازی",
+        "dyno_warning": "تخمینی / محاسباتی — دینامومتر واقعی نیست",
+        "dyno_note": (
+            "مقادیر پیش‌فرض عمومی‌اند و مشخصات هیچ خودروی خاصی نیستند؛ وزن خالی را از مدارک "
+            "خودرو وارد کنید. فرض‌ها: جاده صاف، بدون باد، یک دنده، دریچه گاز کامل. خطای وزن، "
+            "Cd، سطح مقطع یا تلفات انتقال مستقیماً در نتیجه اثر می‌گذارد."
+        ),
+        "dyno_params": {
+            "curb_mass_kg": "وزن خالی خودرو (kg)",
+            "extra_mass_kg": "وزن سرنشین و بار (kg)",
+            "drag_coefficient": "ضریب پسا (Cd)",
+            "frontal_area_m2": "سطح مقطع جلو (m²)",
+            "drivetrain_loss": "تلفات انتقال قدرت (٪)",
+            "rolling_resistance": "ضریب مقاومت غلتشی",
+            "air_density_kg_m3": "چگالی هوا (kg/m³)",
+        },
+        "dyno_mass_unset": "وارد نشده",
+        "dyno_start": "شروع ثبت کشش",
+        "dyno_finish": "پایان و محاسبه",
+        "dyno_cancel": "لغو",
+        "dyno_status": {
+            "idle": "آماده. در یک دنده با دریچه گاز کامل شتاب بگیرید.",
+            "recording": "در حال ثبت… ({0} نمونه)",
+            "done": "محاسبه شد",
+            "error": "محاسبه ممکن نشد: {0}",
+        },
+        "dyno_peaks": (
+            "بیشینه توان: {0} اسب بخار ({1} kW) در {2} rpm — بیشینه گشتاور: {3} N·m در {4} rpm"
+        ),
+        "dyno_quality": "کیفیت: {0} نمونه، بیشترین فاصله {1} ثانیه، R² نسبت دنده {2}",
+        "dyno_quality_low": "⚠️ کیفیت پایین: {0}",
+        "dyno_quality_reasons": {
+            "few_samples": "نمونه کم",
+            "gear_fit": "نسبت سرعت به دور ثابت نیست",
+            "slow_sampling": "نمونه‌برداری کند",
+            "throttle_unknown": "دریچه گاز نامعلوم",
+        },
+        "dyno_chart_rpm": "دور موتور (rpm)",
+        "dyno_chart_power": "توان (اسب بخار)",
+        "dyno_chart_torque": "گشتاور (N·m)",
         "messages": {
             "msg.connected": "اتصال برقرار شد: {0} ({1})",
             "msg.disconnected": "اتصال قطع شد",
@@ -204,6 +274,7 @@ COPY: dict[str, dict[str, Any]] = {
             "dashboard": "Dashboard",
             "graph": "Live Graph",
             "diag": "Trouble Codes",
+            "perf": "Performance",
             "ident": "Identification",
             "bench": "Bench / Tuning",
             "settings": "Settings",
@@ -246,6 +317,7 @@ COPY: dict[str, dict[str, Any]] = {
             "no_response": "No response",
             "malformed": "Malformed response",
             "no_data": "No data",
+            "fast_mode": "Paused (fast polling)",
         },
         "dtc_title": "Trouble codes",
         "dtc_note": "Descriptions come from a generic, non-authoritative catalogue (English).",
@@ -350,6 +422,73 @@ COPY: dict[str, dict[str, Any]] = {
         ),
         "traffic_stats": "{0} lines, {1} older lines dropped (capacity {2})",
         "traffic_sim_tag": "[SIMULATED]",
+        "perf_fast_poll": (
+            "Fast polling while measuring (rpm, speed and throttle only: fewer commands, not more)"
+        ),
+        "perf_estimated": "estimated / calculated",
+        "perf_simulated": "[simulated data]",
+        "timer_title": "0–100 km/h timer (estimated)",
+        "timer_arm": "Arm",
+        "timer_reset": "Reset",
+        "timer_state": {
+            "idle": "Idle — press Arm",
+            "armed": "Waiting for the vehicle to stand still…",
+            "armed_at_standstill": "Ready — go",
+            "running": "Measuring…",
+            "completed": "Completed",
+            "aborted": "Aborted: {0}",
+        },
+        "timer_abort": {
+            "speed_drop": "speed dropped",
+            "sample_gap": "speed data stopped",
+            "timeout": "took too long",
+            "disconnected": "disconnected",
+        },
+        "timer_result": "0–{0}: {1} s — 0–{2}: {3} s — distance: {4} m",
+        "timer_quality": "uncertainty ±{0} s — largest sample interval {1} s — {2} samples",
+        "timer_note": (
+            "Based on the vehicle speed the ECU reports (1 km/h resolution, a few samples per "
+            "second); not equivalent to a timing gate or GPS."
+        ),
+        "dyno_title": "Virtual dyno",
+        "dyno_warning": "Estimated / calculated — not a real dynamometer",
+        "dyno_note": (
+            "Defaults are generic, not the specification of any vehicle; enter the curb mass "
+            "from the vehicle's documents. Assumes a flat road, no wind, one gear and full "
+            "throttle. Errors in mass, Cd, frontal area or drivetrain loss go straight into "
+            "the result."
+        ),
+        "dyno_params": {
+            "curb_mass_kg": "Curb mass (kg)",
+            "extra_mass_kg": "Occupants and cargo (kg)",
+            "drag_coefficient": "Drag coefficient (Cd)",
+            "frontal_area_m2": "Frontal area (m²)",
+            "drivetrain_loss": "Drivetrain loss (%)",
+            "rolling_resistance": "Rolling resistance coefficient",
+            "air_density_kg_m3": "Air density (kg/m³)",
+        },
+        "dyno_mass_unset": "not entered",
+        "dyno_start": "Start recording a pull",
+        "dyno_finish": "Finish and calculate",
+        "dyno_cancel": "Cancel",
+        "dyno_status": {
+            "idle": "Ready. Accelerate at full throttle in one gear.",
+            "recording": "Recording… ({0} samples)",
+            "done": "Calculated",
+            "error": "Could not calculate: {0}",
+        },
+        "dyno_peaks": "Peak power: {0} PS ({1} kW) at {2} rpm — peak torque: {3} N·m at {4} rpm",
+        "dyno_quality": "Quality: {0} samples, largest interval {1} s, gear-ratio R² {2}",
+        "dyno_quality_low": "⚠️ Low quality: {0}",
+        "dyno_quality_reasons": {
+            "few_samples": "few samples",
+            "gear_fit": "speed/rpm ratio not constant",
+            "slow_sampling": "slow sampling",
+            "throttle_unknown": "throttle unknown",
+        },
+        "dyno_chart_rpm": "Engine speed (rpm)",
+        "dyno_chart_power": "Power (PS)",
+        "dyno_chart_torque": "Torque (N·m)",
         "messages": {
             "msg.connected": "Connected: {0} ({1})",
             "msg.disconnected": "Disconnected",

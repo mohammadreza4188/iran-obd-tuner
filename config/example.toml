@@ -57,3 +57,15 @@ output_dir = "output"
 # not ready to be committed, e.g. "knowledge/local".
 # Env: IRAN_OBD_TUNER_KNOWLEDGE_DIR
 # knowledge_dir = "knowledge/local"
+
+# Virtual dyno defaults (estimated power/torque; the dashboard can change them per session).
+# The curb mass has no default: enter your vehicle's mass from its documents.
+# Env: IRAN_OBD_TUNER_DYNO_CURB_MASS_KG, IRAN_OBD_TUNER_DYNO_EXTRA_MASS_KG, ...
+# dyno_curb_mass_kg = 1100.0
+# Generic values below; they are not the specification of any particular vehicle.
+dyno_extra_mass_kg = 75.0          # driver, passengers, cargo
+dyno_drag_coefficient = 0.33
+dyno_frontal_area_m2 = 2.0
+dyno_drivetrain_loss = 0.15        # fraction lost between crank and wheels
+dyno_rolling_resistance = 0.013
+dyno_air_density_kg_m3 = 1.06      # about 1200 m altitude

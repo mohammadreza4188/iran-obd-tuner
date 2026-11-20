@@ -84,6 +84,21 @@ def _as_optional_path(raw: Any, field: str) -> Path | None:
     return None if text is None else Path(text)
 
 
+def _as_non_negative_float(raw: Any, field: str) -> float:
+    try:
+        value = float(str(raw).strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"setting {field!r} must be a number, got {raw!r}") from exc
+    if value < 0:
+        raise ConfigurationError(f"setting {field!r} must not be negative, got {value}")
+    return value
+
+
+def _as_optional_positive_float(raw: Any, field: str) -> float | None:
+    text = str(raw).strip()
+    return None if not text else _as_positive_float(text, field)
+
+
 def _as_log_level(raw: Any, field: str) -> str:
     try:
         return normalize_log_level(str(raw))
@@ -124,6 +139,13 @@ FIELD_CASTERS: Mapping[str, Callable[[Any, str], Any]] = {
     "log_file": _as_optional_path,
     "output_dir": _as_path,
     "knowledge_dir": _as_optional_path,
+    "dyno_curb_mass_kg": _as_optional_positive_float,
+    "dyno_extra_mass_kg": _as_non_negative_float,
+    "dyno_drag_coefficient": _as_positive_float,
+    "dyno_frontal_area_m2": _as_positive_float,
+    "dyno_drivetrain_loss": _as_non_negative_float,
+    "dyno_rolling_resistance": _as_non_negative_float,
+    "dyno_air_density_kg_m3": _as_positive_float,
 }
 
 
@@ -142,6 +164,10 @@ class AppSettings:
         log_file: Optional log file; logs go to stderr when unset.
         output_dir: Directory for generated artefacts (reports, logs, captures).
         knowledge_dir: Optional extra knowledge data directory.
+        dyno_*: Defaults of the virtual dyno's vehicle parameters (the dashboard can change
+            them for the session). ``dyno_curb_mass_kg`` has no default on purpose: the
+            vehicle's mass must come from the user. Ranges are checked by
+            :class:`iran_obd_tuner.diagnostics.dyno.VehicleParameters`.
         config_file: File the settings were loaded from, or ``None`` for pure defaults.
     """
 
@@ -155,6 +181,13 @@ class AppSettings:
     log_file: Path | None = None
     output_dir: Path = Path("output")
     knowledge_dir: Path | None = None
+    dyno_curb_mass_kg: float | None = None
+    dyno_extra_mass_kg: float = 75.0
+    dyno_drag_coefficient: float = 0.33
+    dyno_frontal_area_m2: float = 2.0
+    dyno_drivetrain_loss: float = 0.15
+    dyno_rolling_resistance: float = 0.013
+    dyno_air_density_kg_m3: float = 1.06
     config_file: Path | None = None
 
     def __post_init__(self) -> None:
