@@ -165,6 +165,18 @@ COPY: dict[str, dict[str, Any]] = {
             "010F": "دمای هوای ورودی",
             "0111": "دریچه گاز",
         },
+        "log_tab_events": "رویدادها",
+        "log_tab_traffic": "ترافیک خام آداپتور",
+        "traffic_pause": "توقف نمایش",
+        "traffic_resume": "ادامه نمایش",
+        "traffic_clear": "پاک کردن",
+        "traffic_copy": "کپی در کلیپ‌بورد",
+        "traffic_privacy": (
+            "این خطوط ممکن است شماره شاسی (VIN) خودرو را داشته باشند؛ پیش از انتشار عمومی "
+            "آن‌ها را بررسی کنید."
+        ),
+        "traffic_stats": "{0} خط، {1} خط قدیمی حذف‌شده (ظرفیت {2})",
+        "traffic_sim_tag": "[شبیه‌سازی]",
         "messages": {
             "msg.connected": "اتصال برقرار شد: {0} ({1})",
             "msg.disconnected": "اتصال قطع شد",
@@ -327,6 +339,17 @@ COPY: dict[str, dict[str, Any]] = {
             "010F": "Intake air temperature",
             "0111": "Throttle position",
         },
+        "log_tab_events": "Events",
+        "log_tab_traffic": "Raw adapter traffic",
+        "traffic_pause": "Pause view",
+        "traffic_resume": "Resume view",
+        "traffic_clear": "Clear",
+        "traffic_copy": "Copy to clipboard",
+        "traffic_privacy": (
+            "These lines may contain the vehicle's VIN; review them before sharing publicly."
+        ),
+        "traffic_stats": "{0} lines, {1} older lines dropped (capacity {2})",
+        "traffic_sim_tag": "[SIMULATED]",
         "messages": {
             "msg.connected": "Connected: {0} ({1})",
             "msg.disconnected": "Disconnected",

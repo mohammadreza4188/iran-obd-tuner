@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from iran_obd_tuner.core.config import AppSettings
+from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository, KnowledgeRepository
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 from iran_obd_tuner.hardware.mock import MockScenario
@@ -46,11 +47,17 @@ class AppDashboardBackend:
         self._knowledge = (
             knowledge if knowledge is not None else JsonKnowledgeRepository(settings.knowledge_dir)
         )
+        # One log for the whole dashboard: every session's adapter records into it.
+        self._traffic_log = TrafficLog()
 
     @property
     def settings(self) -> AppSettings:
         """Settings this backend was built from."""
         return self._settings
+
+    @property
+    def traffic_log(self) -> TrafficLog:
+        return self._traffic_log
 
     @property
     def output_dir(self) -> Path:
@@ -61,13 +68,18 @@ class AppDashboardBackend:
 
     def create_session(self, *, simulation: bool, port: str | None) -> LiveDataSession:
         if simulation:
-            adapter = create_adapter(MOCK_ADAPTER_NAME, mock_scenario=MockScenario.drive_cycle())
+            adapter = create_adapter(
+                MOCK_ADAPTER_NAME,
+                mock_scenario=MockScenario.drive_cycle(),
+                traffic_log=self._traffic_log,
+            )
         else:
             adapter = create_adapter(
                 ELM327_ADAPTER_NAME,
                 serial_port=port,
                 serial_baudrate=self._settings.serial_baudrate,
                 command_timeout_s=self._settings.command_timeout_s,
+                traffic_log=self._traffic_log,
             )
         return LiveDataSession(
             adapter,

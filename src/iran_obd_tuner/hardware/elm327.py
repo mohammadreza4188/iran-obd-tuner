@@ -37,6 +37,7 @@ from collections.abc import Callable
 from iran_obd_tuner.core.dtc import DtcStatus
 from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
+    AdapterError,
     ProtocolError,
     UnsupportedPidError,
 )
@@ -45,6 +46,7 @@ from iran_obd_tuner.core.models import Measurement
 from iran_obd_tuner.core.monitors import MonitorStatus
 from iran_obd_tuner.core.pids import describe_pid, normalize_pid
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
+from iran_obd_tuner.core.traffic import Direction, TrafficLog
 from iran_obd_tuner.hardware import elm327_protocol as proto
 from iran_obd_tuner.hardware.base import AdapterInfo, AdapterKind, ObdAdapter
 from iran_obd_tuner.hardware.transport import PySerialTransport, Transport
@@ -79,6 +81,12 @@ SEARCH_TIMEOUT_S = 30.0
 TransportFactory = Callable[[str, int], Transport]
 
 
+def _visible(raw: bytes) -> str:
+    """Raw reply as one readable line: CR shown as ``⏎``, undecodable bytes as ``\\xNN``."""
+    text = raw.decode("ascii", errors="backslashreplace")
+    return text.replace("\r", "⏎").replace("\n", "")
+
+
 class Elm327Adapter(ObdAdapter):
     """Read-only ELM327 adapter.
 
@@ -98,8 +106,9 @@ class Elm327Adapter(ObdAdapter):
         command_timeout_s: float = 2.0,
         policy: SafetyPolicy = DEFAULT_POLICY,
         transport_factory: TransportFactory = PySerialTransport.open,
+        traffic_log: TrafficLog | None = None,
     ) -> None:
-        super().__init__(policy=policy)
+        super().__init__(policy=policy, traffic_log=traffic_log)
         if not port.strip():
             raise ValueError("an explicit serial port is required")
         self._port = port.strip()
@@ -208,10 +217,15 @@ class Elm327Adapter(ObdAdapter):
         if self._transport is None:
             raise AdapterConnectionError(f"{ELM327_NAME}: adapter is not connected")
         self._transport.discard_input()
+        self._record(Direction.TX, normalized)  # only allowlisted commands get this far
         self._transport.write(normalized.encode("ascii") + b"\r")
-        raw = self._transport.read_until(
-            proto.PROMPT, self._command_timeout_s if timeout_s is None else timeout_s
-        )
+        wait_s = self._command_timeout_s if timeout_s is None else timeout_s
+        try:
+            raw = self._transport.read_until(proto.PROMPT, wait_s)
+        except AdapterError as exc:
+            self._record(Direction.INFO, f"{type(exc).__name__}: {exc}")
+            raise
+        self._record(Direction.RX, _visible(raw))
         lines = proto.clean_reply(raw, normalized)
         self._log.debug("%s -> %r", normalized, lines)
         if check_status:

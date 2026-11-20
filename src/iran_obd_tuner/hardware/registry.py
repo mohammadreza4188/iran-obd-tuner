@@ -19,6 +19,7 @@ from iran_obd_tuner.core.exceptions import (
     ConfigurationError,
 )
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
+from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.hardware.base import AdapterInfo, AdapterKind, ObdAdapter
 from iran_obd_tuner.hardware.elm327 import ELM327_INFO, ELM327_NAME, Elm327Adapter
 from iran_obd_tuner.hardware.mock import MockObdAdapter, MockScenario
@@ -81,6 +82,7 @@ def create_adapter(
     serial_port: str | None = None,
     serial_baudrate: int = 38400,
     command_timeout_s: float = 2.0,
+    traffic_log: TrafficLog | None = None,
 ) -> ObdAdapter:
     """Instantiate the adapter called ``name``.
 
@@ -93,6 +95,7 @@ def create_adapter(
             connected to every port.
         serial_baudrate: Baud rate of a serial adapter.
         command_timeout_s: Seconds a serial adapter waits for each reply.
+        traffic_log: Where the adapter records its TX/RX lines (optional).
 
     Returns:
         A ready-to-connect adapter (not yet connected).
@@ -111,7 +114,7 @@ def create_adapter(
         raise AdapterNotFoundError(f"unknown adapter {name!r}; known adapters are: {known}")
 
     if normalized == MOCK_ADAPTER_NAME:
-        return MockObdAdapter(mock_scenario, policy=policy)
+        return MockObdAdapter(mock_scenario, policy=policy, traffic_log=traffic_log)
 
     if normalized == ELM327_ADAPTER_NAME:
         if serial_port is None or not serial_port.strip():
@@ -125,6 +128,7 @@ def create_adapter(
             baudrate=serial_baudrate,
             command_timeout_s=command_timeout_s,
             policy=policy,
+            traffic_log=traffic_log,
         )
 
     raise AdapterNotImplementedError(

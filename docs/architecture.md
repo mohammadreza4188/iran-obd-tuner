@@ -73,6 +73,8 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `core/monitors.py` | decode PID `0101`: MIL، تعداد DTC، نوع احتراق، آمادگی مانیتورها | پیاده‌شده (جدول بیت‌ها با J1979 اصلی تأیید نشده) |
 | `core/dtc.py` → `DtcStatus` | دسته کد خطا: stored (۰۳) / pending (۰۷) / permanent (۰A) | پیاده‌شده |
 | `ui/diagnostics_view.py` | تب کدهای خطا: دسته‌ها، فیلتر، جدول Freeze Frame | پیاده‌شده |
+| `core/traffic.py` | `TrafficLog`: بافر حلقوی محدود و thread-safe برای خطوط TX/RX/INFO | پیاده‌شده |
+| `ui/traffic_view.py` | زیرتب «ترافیک خام»: توقف نمایش، پاک کردن، کپی | پیاده‌شده |
 | `diagnostics/service.py` | `DiagnosticService.collect_report()` + تفسیر مشترک کد خطا و شناسه خودرو | پیاده‌شده |
 | `diagnostics/live_data.py` | `LiveDataSession`, `LiveSnapshot`, `PidReading`, `PidStatus` | پیاده‌شده |
 | `diagnostics/recorder.py` | `CsvRecorder` (UTC، واحد، ستون `simulated`) | پیاده‌شده |
@@ -253,6 +255,8 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۱۹ | (Milestone 2) همه I/O آداپتور روی یک thread پس‌زمینه، به ترتیب؛ نتیجه‌های کهنه پس از قطع دور ریخته می‌شوند | جستجوی پروتکل تا ده‌ها ثانیه طول می‌کشد؛ session ایمن برای چند thread نیست | thread pool |
 | ۲۰ | (Milestone 3) خواندن مستقل هر بخش با `ReadOutcome`؛ گزارش JSON نسخه ۲ | پشتیبانی جزئی ECUها (مثلاً بدون سرویس ۰A) رایج است؛ نبود یک بخش نباید کل تشخیص را خراب کند | شکست کل گزارش با اولین خطا |
 | ۲۱ | (Milestone 3) فهرست سفید فقط `02xx00` (frame ۰۰)، `07` و `0A` را اضافه می‌کند | همه خواندنی‌اند؛ ۰۴، ۰۸ و UDS همچنان رد می‌شوند | باز کردن کل سرویس ۰۲ |
+| ۲۲ | (Milestone 3) `TrafficLog` در `core` (نه `hardware`) و تزریق آن از `app` به آداپتور | آداپتور در thread کاری می‌نویسد و UI در thread اصلی می‌خواند، بدون اینکه `ui` لایه `hardware` را import کند. فقط دستورهای عبوری از فهرست سفید ثبت می‌شوند | ثبت در LiveDataSession (پاسخ خام را نمی‌بیند) |
+| ۲۳ | (Milestone 3) شبیه‌ساز در ترافیک فقط «درخواست → مقدار decodeشده» ثبت می‌کند | شبیه‌ساز باس ندارد؛ فریم هگز ساختگی شبیه ترافیک واقعی، داده جعلی است | تولید فریم با فرمول معکوس |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)

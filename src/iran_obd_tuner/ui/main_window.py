@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -67,6 +68,7 @@ from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
 from iran_obd_tuner.ui.icon import build_icon
 from iran_obd_tuner.ui.safety_modal import SafetyModal
+from iran_obd_tuner.ui.traffic_view import TrafficView
 from iran_obd_tuner.ui.worker import BackgroundRunner
 
 __all__ = ["DASHBOARD_PIDS", "GAUGES", "GaugeSpec", "MainWindow"]
@@ -505,12 +507,13 @@ class MainWindow(QMainWindow):
         settings_layout.addStretch()
         self.stack.addWidget(settings_page)
 
-        # Log
-        log_page = QWidget()
-        log_layout = QVBoxLayout(log_page)
+        # Log: application events + raw adapter traffic, as two sub-tabs
+        self.log_tabs = QTabWidget()
         self.log_list = QListWidget()
-        log_layout.addWidget(self.log_list)
-        self.stack.addWidget(log_page)
+        self.traffic_view = TrafficView(self._backend.traffic_log)
+        self.log_tabs.addTab(self.log_list, "")
+        self.log_tabs.addTab(self.traffic_view, "")
+        self.stack.addWidget(self.log_tabs)
 
         self._reload_ports()
         self._switch_tab("dashboard")
@@ -556,6 +559,9 @@ class MainWindow(QMainWindow):
         )
         self.sim_banner.setText(t["sim_banner"])
         self.diag_view.set_language(self.lang)
+        self.traffic_view.set_language(self.lang)
+        self.log_tabs.setTabText(0, t["log_tab_events"])
+        self.log_tabs.setTabText(1, t["log_tab_traffic"])
         self.ident_btn.setText(t["ident_btn"])
         self.bench_title.setText(t["bench_title"])
         self.bench_warning.setText(t["bench_warning"])

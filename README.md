@@ -49,6 +49,7 @@
 | وضعیت چراغ چک (MIL)، تعداد کدهای تأییدشده و آمادگی مانیتورها (PID `0101`) — جدول بیت‌ها با J1979 اصلی **تأیید نشده** | `src/iran_obd_tuner/core/monitors.py` |
 | کدهای خطای ذخیره‌شده / در انتظار / دائمی (سرویس ۰۳ / ۰۷ / ۰A)؛ هر دسته وضعیت خودش را دارد و نبود یک دسته بقیه را خراب نمی‌کند | `src/iran_obd_tuner/diagnostics/service.py` |
 | Freeze Frame شماره ۰۰ (سرویس ۰۲): کد عامل و ۸ پارامتر؛ پارامتر ذخیره‌نشده با «—» | `src/iran_obd_tuner/diagnostics/service.py`, `ui/diagnostics_view.py` |
+| نمایشگر ترافیک خام آداپتور (TX/RX) در زیرتب «رویدادها»، با توقف نمایش، پاک کردن و کپی؛ بافر محدود و ایمن برای چند thread. شبیه‌ساز فقط درخواست و مقدار decodeشده را با برچسب «شبیه‌سازی» ثبت می‌کند، نه فریم هگز ساختگی | `src/iran_obd_tuner/core/traffic.py`, `ui/traffic_view.py` |
 | گزارش JSON نسخه ۲ (`schema_version: 2`) با `monitor_status`، `dtc_categories` و `freeze_frame` | `src/iran_obd_tuner/diagnostics/models.py` |
 | خواندن داده در thread پس‌زمینه (رابط کاربری هنگام جستجوی پروتکل قفل نمی‌شود) | `src/iran_obd_tuner/ui/worker.py` |
 | دیتابیس دانش JSON (زیرمجموعه عمومی کدهای خطا) | `src/iran_obd_tuner/database/` |

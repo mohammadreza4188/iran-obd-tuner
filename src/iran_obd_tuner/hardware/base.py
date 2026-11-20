@@ -35,6 +35,7 @@ from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import Measurement
 from iran_obd_tuner.core.monitors import MonitorStatus
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, OperationClass, SafetyPolicy, require
+from iran_obd_tuner.core.traffic import Direction, TrafficLog
 
 __all__ = ["AdapterInfo", "AdapterKind", "MeasurementBatch", "ObdAdapter"]
 
@@ -102,10 +103,27 @@ class ObdAdapter(ABC):
     this base class through the safety policy.
     """
 
-    def __init__(self, *, policy: SafetyPolicy = DEFAULT_POLICY) -> None:
+    def __init__(
+        self,
+        *,
+        policy: SafetyPolicy = DEFAULT_POLICY,
+        traffic_log: TrafficLog | None = None,
+    ) -> None:
         self._policy = policy
         self._connected = False
+        self._traffic = traffic_log
         self._log = get_logger(f"hardware.{type(self).__name__}")
+
+    @property
+    def traffic_log(self) -> TrafficLog | None:
+        """Where TX/RX lines are recorded, if anywhere (see :mod:`iran_obd_tuner.core.traffic`)."""
+        return self._traffic
+
+    def _record(self, direction: Direction, text: str) -> None:
+        """Append one line to the traffic log, tagged with this adapter's simulated flag."""
+        if self._traffic is not None:
+            info = self.info
+            self._traffic.append(direction, text, adapter=info.name, simulated=info.simulated)
 
     # ------------------------------------------------------------------ #
     # identity and state

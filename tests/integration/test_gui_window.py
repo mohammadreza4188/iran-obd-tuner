@@ -507,3 +507,47 @@ def test_freeze_frame_not_stored_is_said_plainly(window: MainWindow, backend: Te
 
 def test_freeze_frame_button_needs_a_connection(window: MainWindow) -> None:
     assert window.diag_view.freeze_btn.isEnabled() is False
+
+
+# --------------------------------------------------------------------------- #
+# M3 part B: raw traffic inspector
+# --------------------------------------------------------------------------- #
+
+
+def test_traffic_tab_shows_simulated_exchanges(window: MainWindow) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)  # drive cycle via the production wiring (shared log)
+    view = window.traffic_view
+
+    view.refresh()
+
+    lines = view.lines()
+    assert any(" TX   010C" in line for line in lines)
+    assert any(" RX   " in line and "rpm" in line for line in lines)
+    assert all(line.endswith(COPY["en"]["traffic_sim_tag"]) for line in lines)
+    assert window.log_tabs.tabText(1) == COPY["en"]["log_tab_traffic"]
+
+
+def test_traffic_pause_clear_and_copy(window: MainWindow, qt_app: QApplication) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    view = window.traffic_view
+    view.refresh()
+
+    view.pause_btn.click()
+    frozen = view.lines()
+    window._tick()
+    settle(window)
+    view.refresh()
+    assert view.paused and view.lines() == frozen
+    assert view.pause_btn.text() == COPY["en"]["traffic_resume"]
+
+    view.pause_btn.click()  # resume: catches up
+    assert len(view.lines()) > len(frozen)
+
+    view.copy_btn.click()
+    assert QApplication.clipboard().text() == view.text.toPlainText()
+
+    view.clear_btn.click()
+    assert view.lines() == []
+    assert len(window._backend.traffic_log) == 0

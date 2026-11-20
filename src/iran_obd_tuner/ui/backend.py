@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 
 __all__ = ["DashboardBackend"]
@@ -21,6 +22,11 @@ __all__ = ["DashboardBackend"]
 
 class DashboardBackend(Protocol):
     """Services the dashboard window uses."""
+
+    @property
+    def traffic_log(self) -> TrafficLog:
+        """Shared record of adapter TX/RX lines shown in the traffic panel."""
+        ...
 
     @property
     def output_dir(self) -> Path:

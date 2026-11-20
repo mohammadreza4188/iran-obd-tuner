@@ -27,7 +27,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from iran_obd_tuner.core.dtc import DtcStatus, parse_dtc_code
 from iran_obd_tuner.core.exceptions import (
@@ -41,7 +41,10 @@ from iran_obd_tuner.core.models import Measurement
 from iran_obd_tuner.core.monitors import MonitorStatus, decode_monitor_status
 from iran_obd_tuner.core.pids import describe_pid, normalize_pid
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
+from iran_obd_tuner.core.traffic import Direction, TrafficLog
 from iran_obd_tuner.hardware.base import AdapterInfo, AdapterKind, ObdAdapter
+
+_T = TypeVar("_T")
 
 __all__ = [
     "FailureMode",
@@ -372,8 +375,9 @@ class MockObdAdapter(ObdAdapter):
         *,
         policy: SafetyPolicy = DEFAULT_POLICY,
         clock: Callable[[], float] = time.monotonic,
+        traffic_log: TrafficLog | None = None,
     ) -> None:
-        super().__init__(policy=policy)
+        super().__init__(policy=policy, traffic_log=traffic_log)
         self._scenario = MockScenario.default() if scenario is None else scenario
         self._clock = clock
         self._connected_at = 0.0
@@ -431,16 +435,33 @@ class MockObdAdapter(ObdAdapter):
             raise ProtocolError("mock: malformed response frame (simulated failure)")
 
     def read_vin(self) -> str | None:
+        return self._simulated_exchange(
+            "0902", lambda: self._sim_read_vin(), lambda v: v or "no VIN"
+        )
+
+    def _sim_read_vin(self) -> str | None:
         self._guard_read()
         self._guard_decoding()
         return self._scenario.vin
 
     def read_supported_pids(self) -> tuple[str, ...]:
+        return self._simulated_exchange(
+            "0100", lambda: self._sim_read_supported_pids(), lambda v: " ".join(v)
+        )
+
+    def _sim_read_supported_pids(self) -> tuple[str, ...]:
         self._guard_read()
         self._guard_decoding()
         return self._scenario.supported_pids
 
     def read_measurement(self, pid: str) -> Measurement:
+        return self._simulated_exchange(
+            normalize_pid(pid),
+            lambda: self._sim_read_measurement(pid),
+            lambda m: f"{m.value:g} {m.unit}",
+        )
+
+    def _sim_read_measurement(self, pid: str) -> Measurement:
         self._guard_read()
         normalized = normalize_pid(pid)
         value = self._scenario.value_for(normalized)
@@ -453,13 +474,27 @@ class MockObdAdapter(ObdAdapter):
         return Measurement(pid=spec.pid, name=spec.name, value=value, unit=spec.unit)
 
     def read_diagnostic_trouble_codes(self) -> tuple[str, ...]:
+        return self._simulated_exchange(
+            "03",
+            lambda: self._sim_read_diagnostic_trouble_codes(),
+            lambda v: " ".join(v) or "no codes",
+        )
+
+    def _sim_read_diagnostic_trouble_codes(self) -> tuple[str, ...]:
         self._guard_read()
         self._guard_decoding()
         return self._scenario.trouble_codes
 
     def read_trouble_codes(self, status: DtcStatus) -> tuple[str, ...]:
+        return self._simulated_exchange(
+            status.service,
+            lambda: self._sim_read_trouble_codes(status),
+            lambda v: " ".join(v) or "no codes",
+        )
+
+    def _sim_read_trouble_codes(self, status: DtcStatus) -> tuple[str, ...]:
         if status is DtcStatus.STORED:
-            return self.read_diagnostic_trouble_codes()
+            return self._sim_read_diagnostic_trouble_codes()
         self._guard_read()
         codes = (
             self._scenario.pending_codes
@@ -474,6 +509,13 @@ class MockObdAdapter(ObdAdapter):
         return codes
 
     def read_monitor_status(self) -> MonitorStatus:
+        return self._simulated_exchange(
+            "0101",
+            lambda: self._sim_read_monitor_status(),
+            lambda s: f"MIL {'on' if s.mil_on else 'off'}, {s.confirmed_dtc_count} code(s)",
+        )
+
+    def _sim_read_monitor_status(self) -> MonitorStatus:
         self._guard_read()
         if self._scenario.monitor_status_hex is None:
             raise UnsupportedPidError("PID 0101 is not supported by the simulated vehicle")
@@ -481,18 +523,37 @@ class MockObdAdapter(ObdAdapter):
         return decode_monitor_status(bytes.fromhex(self._scenario.monitor_status_hex))
 
     def read_freeze_frame_supported_pids(self) -> tuple[str, ...]:
+        return self._simulated_exchange(
+            "020000", lambda: self._sim_read_freeze_frame_supported_pids(), lambda v: " ".join(v)
+        )
+
+    def _sim_read_freeze_frame_supported_pids(self) -> tuple[str, ...]:
         self._guard_read()
         self._require_freeze_frame_service()
         self._guard_decoding()
         return tuple(reading.pid for reading in self._scenario.freeze_frame)
 
     def read_freeze_frame_trigger(self) -> str | None:
+        return self._simulated_exchange(
+            "020200",
+            lambda: self._sim_read_freeze_frame_trigger(),
+            lambda v: v or "no freeze frame",
+        )
+
+    def _sim_read_freeze_frame_trigger(self) -> str | None:
         self._guard_read()
         self._require_freeze_frame_service()
         self._guard_decoding()
         return self._scenario.freeze_frame_trigger
 
     def read_freeze_frame_value(self, pid: str) -> Measurement:
+        return self._simulated_exchange(
+            f"02{normalize_pid(pid)[2:]}00",
+            lambda: self._sim_read_freeze_frame_value(pid),
+            lambda m: f"{m.value:g} {m.unit}",
+        )
+
+    def _sim_read_freeze_frame_value(self, pid: str) -> Measurement:
         self._guard_read()
         self._require_freeze_frame_service()
         normalized = normalize_pid(pid)
@@ -505,6 +566,23 @@ class MockObdAdapter(ObdAdapter):
                     pid=spec.pid, name=spec.name, value=reading.value, unit=spec.unit
                 )
         raise UnsupportedPidError(f"PID {normalized} is not stored in the simulated freeze frame")
+
+    def _simulated_exchange(
+        self, request: str, read: Callable[[], _T], render: Callable[[_T], str]
+    ) -> _T:
+        """Run one simulated read and record it: the request, then the decoded answer.
+
+        No hex frame is invented: the simulator has no bus. Lines are tagged simulated by
+        the base class (``AdapterInfo.simulated``).
+        """
+        self._record(Direction.TX, request)
+        try:
+            result = read()
+        except Exception as exc:
+            self._record(Direction.INFO, f"{type(exc).__name__}: {exc}")
+            raise
+        self._record(Direction.RX, render(result))
+        return result
 
     def _require_freeze_frame_service(self) -> None:
         if not self._scenario.supports_freeze_frame:
