@@ -53,7 +53,8 @@ log_level = "INFO"
 output_dir = "output"
 
 # Optional extra knowledge data directory. Files placed here override the bundled
-# knowledge database (currently: dtc_catalog.json). Use it for research data that is
+# knowledge database: dtc_catalog.json, and vehicles/*.json vehicle packs (a local vehicle
+# replaces the bundled one with the same id). Use it for research data that is
 # not ready to be committed, e.g. "knowledge/local".
 # Env: IRAN_OBD_TUNER_KNOWLEDGE_DIR
 # knowledge_dir = "knowledge/local"

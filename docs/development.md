@@ -157,6 +157,14 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
 `SimulatedEcuConfig` بسازید. سرویس جدید UDS فقط پس از افزودن به `ALLOWED_REQUESTS` قابل ارسال است
 و تست فهرست سفید (`test_allowlist_is_exactly_the_read_only_set`) باید آگاهانه به‌روز شود.
 
+### پایگاه دانش خودرو، تطبیق و بسته شواهد: تست بدون سخت‌افزار
+
+بسته ساختگی `tests/fixtures/vehicle_packs/vehicles/fixturemotors.json` (سازنده خیالی «Fixture Motors»)
+همه سطح‌های اطمینان را دارد و برای تست تطبیق، CLI و داشبورد استفاده می‌شود؛ بسته‌های واقعی همراه
+برنامه عمداً ادعای قابل مقایسه ندارند. تست‌های رد شدن (`test_schema_rejects`) هر قاعده اعتبارسنج را با
+یک تغییر کوچک روی همین بسته بررسی می‌کنند. پنهان‌سازی VIN روی فریم‌های واقعی ISO-TP با باس مجازی
+تست می‌شود (`test_evidence_bundle_redacts_the_vin_from_real_iso_tp_frames`).
+
 ### داشبورد: مسیر داده
 
 پنجره هیچ‌وقت آداپتور نمی‌سازد. `app/dashboard.py` (`AppDashboardBackend`) حالت «شبیه‌سازی» را
@@ -188,6 +196,40 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
   `knowledge_dir = "knowledge/local"` در `config/local.toml` (پوشه در `.gitignore` است).
 - برای داده منتشرشده: افزودن به `src/iran_obd_tuner/database/data/dtc_catalog.json` **با ذکر منبع**
   در `metadata.source`. داده بدون شاهد (حدس) اضافه نکنید.
+
+#### بسته‌های خودرو (پایگاه دانش خودرو و ECU)
+
+هر سازنده یک فایل JSON در `src/iran_obd_tuner/database/data/vehicles/` دارد (`ikco.json`،
+`saipa.json`، `mvm.json`). افزودن خودرو یا ادعا **فقط ویرایش JSON** است؛ کد پایتون تغییر نمی‌کند.
+اعتبارسنج (`database/vehicle_schema.py`) در زمان بارگذاری و در تست‌ها اجرا می‌شود و خطا را با مسیر
+JSON گزارش می‌دهد (مثلاً `ikco.json: vehicles[0].variants[1].engine.value: ...`).
+
+قواعد نوشتن یک ادعا:
+
+| سطح | `value` | `source` (نوع منبع) | الزامی دیگر |
+|---|---|---|---|
+| `unknown` | `null` | ندارد | `verify` (کلید `guidance.json`) |
+| `unverified` | مقدار | `community_report` یا `project_hypothesis` | `verify` |
+| `reported` | مقدار | `public_reference` یا `manufacturer_publication` | — |
+| `documented` | مقدار | `manufacturer_publication` (استاندارد قبول نیست) | — |
+| `verified` | مقدار | `field_evidence` | `evidence: {bundle, sha256}` |
+
+- هر منبع آنلاین `https://` و تاریخ مراجعه (`accessed`) دارد؛ منبعی که هیچ ادعایی به آن ارجاع ندهد رد می‌شود.
+- مقدار جایگزین («TBD»، «n/a»، «unknown»، «?»، `<...>`، شناسه صفر) هرگز به‌جای `unknown` نوشته نشود.
+- فهرست‌ها (`supported_pids`، `dids`، ...) همیشه صریح نوشته می‌شوند؛ `[]` یعنی «چیزی ثبت نشده».
+- `manufacturer_pids` فقط سرویس‌های خواندنی `0x21`/`0x22` را می‌پذیرد و فقط دانش است؛ هیچ کدی آن را ارسال نمی‌کند.
+- برای پژوهش محلی (قبل از انتشار) فایل را در `knowledge_dir/vehicles/` بگذارید؛ خودرو با همان شناسه
+  جایگزین نسخه همراه بسته می‌شود.
+
+#### ارتقای یک ادعا به `verified`
+
+1. روی خودروی واقعی با آداپتور فقط‌خواندنی: `diagnose` (و در صورت CAN بودن، `uds-ident`).
+2. در داشبورد، تب «پایگاه دانش خودرو» ← «ذخیره بسته شواهد…» (پنهان‌سازی VIN روشن بماند).
+   خودرو و سال مدل را در فرم انتخاب کنید تا ردیف‌های `promotion_candidates` ساخته شوند.
+3. بسته را در `evidence/` کامیت کنید و یک منبع `field_evidence` به بسته JSON خودرو اضافه کنید.
+4. ادعا را `verified` کنید و `evidence: {"bundle": "evidence/<file>.json", "sha256": "<content_sha256>"}`
+   بنویسید. تست `test_bundled_verified_claims_match_their_evidence` بررسی می‌کند که هش درست است، بسته
+   شبیه‌سازی‌شده نیست و مقدار ادعا واقعاً در بسته مشاهده شده است.
 
 ### د) قابلیت نوشتنی (فلش/کالیبراسیون)
 

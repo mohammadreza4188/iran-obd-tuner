@@ -35,7 +35,7 @@
 
 | قابلیت | محل |
 |---|---|
-| ورودی خط فرمان با دستورات `version`, `adapters`, `config`, `diagnose`, `uds-ident` | `src/iran_obd_tuner/app/cli.py` |
+| ورودی خط فرمان با دستورات `version`, `adapters`, `config`, `diagnose`, `uds-ident`, `vehicles` | `src/iran_obd_tuner/app/cli.py` |
 | بارگذاری تنظیمات: پیش‌فرض ← فایل TOML ← متغیرهای محیطی | `src/iran_obd_tuner/core/config.py` |
 | راه‌اندازی لاگ استاندارد (stderr و فایل اختیاری) | `src/iran_obd_tuner/core/logging.py` |
 | مدل‌های داده (Measurement/Unit/VehicleInfo) و کاتالوگ PID | `core/models.py`, `core/pids.py` |
@@ -58,6 +58,10 @@
 | گزارش JSON نسخه ۲ (`schema_version: 2`) با `monitor_status`، `dtc_categories` و `freeze_frame` | `src/iran_obd_tuner/diagnostics/models.py` |
 | خواندن داده در thread پس‌زمینه (رابط کاربری هنگام جستجوی پروتکل قفل نمی‌شود) | `src/iran_obd_tuner/ui/worker.py` |
 | دیتابیس دانش JSON (زیرمجموعه عمومی کدهای خطا) | `src/iran_obd_tuner/database/` |
+| **پایگاه دانش خودروها و ECUهای بازار ایران (Milestone 5):** هر ادعا سطح اطمینان (`verified` / `documented` / `reported` / `unverified` / `unknown`) و منبع قابل ردیابی دارد؛ بسته‌های JSON برای ایران‌خودرو (پژو پارس TU5/XU7، پژو ۲۰۶ تیپ ۲/۵، سمند و دنا EF7)، سایپا (پراید، تیبا، ساینا، کوییک) و ام‌وی‌ام (۳۱۵، X22) با اعتبارسنج سخت‌گیر. **همه پروتکل‌ها، شناسه‌های CAN و خانواده‌های ECU «نامعلوم»‌اند** تا شواهد میدانی برسد | `core/knowledge.py`, `database/vehicle_schema.py`, `database/vehicles.py`, `database/data/vehicles/` |
+| تطبیق غیرفعال خودرو/ECU با داده‌های یک جلسه (پروتکل، PIDها، VIN، DIDهای UDS)، بدون ارسال هیچ درخواست؛ نتیجه «سازگار با مشاهدات» است، نه شناسایی قطعی | `diagnostics/vehicle_matcher.py` |
+| خروجی **بسته شواهد میدانی** (Field Evidence Bundle): پروتکل، PIDها، DIDهای شناسایی و ترافیک خام در یک JSON با هش SHA-256؛ شش نویسه آخر VIN به‌طور پیش‌فرض پنهان می‌شود و اگر VIN جایی بماند خروجی رد می‌شود | `diagnostics/evidence_export.py`, `evidence/` |
+| تب «پایگاه دانش خودرو» در داشبورد (دوزبانه، نشان‌های رنگی + متنی اطمینان، تطبیق و خروجی شواهد) | `ui/knowledge_view.py` |
 | سیم‌کشی داشبورد در لایه app (تنظیمات، لاگ، رجیستری آداپتور) | `src/iran_obd_tuner/app/dashboard.py` + `app/gui_main.py` |
 | داشبورد گرافیکی PySide6: گیج‌ها، نمودار زنده، کدهای خطا، شناسایی خودرو، لاگ، دو زبان (فارسی/انگلیسی) | `src/iran_obd_tuner/ui/` |
 | دکمه بازخوانی درگاه‌های سریال در نوار ابزار | `src/iran_obd_tuner/ui/main_window.py` |
@@ -91,7 +95,7 @@
 | مقایسه زمان‌سنج و دینوی مجازی با GPS و دینامومتر واقعی | ۱ | سخت‌افزار و خودرو |
 | اعتبارسنجی CAN/ISO-TP/UDS روی رابط و ECU واقعی؛ تأیید اینکه پژو پارس TU5 روی پایه‌های CAN سوکت OBD اصلاً UDS پاسخ می‌دهد | ۲ | رابط CAN + خودرو |
 | خواندن DIDهای غیراستاندارد و شناسه‌های CAN ویژه خودروهای ایرانی | ۳ | منبع مستند، نه حدس |
-| مطالعه و تکمیل دیتابیس دانش خودروهای ایرانی | ۳ | پژوهش مستند، نه حدس |
+| پر کردن ادعاهای «نامعلوم» پایگاه دانش (پروتکل درگاه OBD، شناسه‌های CAN، خانواده ECU) و ارتقای آن‌ها به `verified` | ۳ | بسته شواهد میدانی از خودروی واقعی |
 | خواندن/ویرایش ROM در حالت Bench و تصحیح چک‌سام | ۴ | تأیید صریح + اعتبارسنجی خودرویی |
 | فلش Bench و مکانیزم بازگردانی | ۵ | کارفرمای تأییدشده و مسیر کنترل‌شده |
 
@@ -211,6 +215,10 @@ iran-obd-tuner diagnose --adapter elm327 --port COM3   # آداپتور واقع
 iran-obd-tuner uds-ident --discover                    # شناسایی UDS با ECU شبیه‌سازی‌شده (نیازمند [can])
 iran-obd-tuner uds-ident --json --output output/ecu.json
 iran-obd-tuner uds-ident --interface slcan --channel COM5 --bitrate 500000   # رابط واقعی، فقط‌خواندنی
+iran-obd-tuner vehicles list                           # پایگاه دانش خودرو: همه خودروها با سطح اطمینان
+iran-obd-tuner vehicles list --manufacturer ikco --json
+iran-obd-tuner vehicles show ikco.peugeot_pars         # همه ادعاها، منبع‌ها و روش بررسی میدانی
+iran-obd-tuner vehicles match --report output/report.json --uds output/ecu.json   # تطبیق آفلاین
 
 # داشبورد گرافیکی (نیازمند extras به نام gui)
 iran-obd-tuner-gui
@@ -258,12 +266,15 @@ iran-obd-tuner/
 │  ├─ hardware/                      قرارداد آداپتور (base.py)، شبیه‌ساز (mock.py)، ELM327، رجیستری، فهرست درگاه‌ها،
 │  │                                 CAN (can_bus.py)، ISO-TP (isotp.py)، UDS (uds.py، uds_link.py، uds_sim.py)
 │  ├─ diagnostics/                   گزارش یک‌باره (service.py)، نشست داده زنده (live_data.py)، ضبط CSV (recorder.py)،
-│  │                                 شناسایی ECU با UDS (ecu_identification.py)
-│  ├─ database/                      دیتابیس دانش (JSON) + داده‌های همراه بسته
+│  │                                 شناسایی ECU با UDS (ecu_identification.py)، تطبیق خودرو (vehicle_matcher.py)،
+│  │                                 بسته شواهد میدانی (evidence_export.py)
+│  ├─ database/                      دیتابیس دانش (JSON) + داده‌های همراه بسته، بسته‌های خودرو (data/vehicles/)
+│  │                                 و اعتبارسنج آن‌ها (vehicle_schema.py، vehicles.py)
 │  ├─ tuning/                        رابط‌های Bench و پیش‌نیازهای نوشتن (بدون پیاده‌سازی)
 │  └─ ui/                            داشبورد PySide6: backend.py، gauges.py، i18n.py، icon.py، safety_modal.py، main_window.py،
-│                                    diagnostics_view.py، performance_view.py، traffic_view.py، uds_view.py
-├─ tests/                            unit/ ، integration/ (CLI + GUI)، fixtures/
+│                                    diagnostics_view.py، performance_view.py، traffic_view.py، uds_view.py، knowledge_view.py
+├─ tests/                            unit/ ، integration/ (CLI + GUI)، fixtures/ (شامل بسته خودروی ساختگی آزمایشی)
+├─ evidence/                         بسته‌های شواهد میدانی بازبینی‌شده که ادعاهای verified به آن‌ها ارجاع می‌دهند
 ├─ config/example.toml               نمونه پیکربندی (کپی به config/local.toml)
 ├─ docs/                             idea-report.md، architecture.md، development.md
 ├─ scripts/check.py                  اجرای گیت‌های کیفیت به‌صورت یکجا
@@ -301,7 +312,9 @@ iran-obd-tuner/
   آداپتور ELM327 فقط‌خواندنی و خواندن در پس‌زمینه. اعتبارسنجی روی آداپتور و خودروی واقعی باقی مانده است.
 - **فاز ۲ (پایه انجام‌شده):** Milestone 4: لایه CAN، ISO-TP و کلاینت UDS فقط‌خواندنی، شناسایی ECU
   و VIN با DID `F190`، ECU شبیه‌سازی‌شده روی باس مجازی. اعتبارسنجی روی رابط CAN و خودروی واقعی باقی مانده است.
-- **فاز ۳:** دیتابیس دانش خودروهای ایرانی بر پایه شواهد مستند
+- **فاز ۳ (ساختار انجام‌شده):** Milestone 5: پایگاه دانش خودروها و ECUهای ایرانی با سطح اطمینان و منبع
+  برای هر ادعا، تطبیق غیرفعال، بسته شواهد میدانی، CLI `vehicles` و تب داشبورد. محتوای فنی (پروتکل، شناسه
+  CAN، خانواده ECU) تا رسیدن شواهد از خودروی واقعی «نامعلوم» است.
 - **فاز ۴:** خواندن و ویرایش ROM در Bench + تصحیح چک‌سام (نیازمند تأیید)
 - **فاز ۵:** فلش Bench با پشتیبان‌گیری اجباری و بازگردانی (نیازمند تأیید)
 - **فازهای بعدی:** فلش از طریق OBD (فقط خانواده‌های کاملاً تست‌شده) و پشتیبانی هیبریدی

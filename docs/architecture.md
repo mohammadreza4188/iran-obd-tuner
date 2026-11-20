@@ -51,7 +51,9 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
   PySide6 در `ui` و ورودی GUI)، import تنبل (داخل تابع) بیرون از `hardware`، هر ارجاع به
   دستور `CLEAR_DTC`، و (Milestone 4) import `can`/`isotp`/`udsoncan` بیرون از توابع `hardware`،
   literal درخواست UDS با SID نوشتنی، فراخوانی `can.Bus` بدون `interface=` و ساخت سرور ECU
-  شبیه‌سازی بیرون از `hardware/uds_link.py`.
+  شبیه‌سازی بیرون از `hardware/uds_link.py`. (Milestone 5) `vehicle_matcher.py` و
+  `evidence_export.py` از `hardware` فقط `PROTOCOL_NAMES` را می‌گیرند (هیچ کلاینت یا آداپتوری)،
+  `database` هیچ فایلی نمی‌نویسد، و فهرست‌های سفید UDS/ELM327 گسترش نیافته‌اند.
 
 جدول کامل کاتالوگ مسیرها:
 
@@ -93,6 +95,12 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `diagnostics/models.py` | `TroubleCode`, `DiagnosticReport` | پیاده‌شده |
 | `database/repository.py` | `KnowledgeRepository` + پیاده‌سازی JSON | پیاده‌شده |
 | `database/data/dtc_catalog.json` | زیرمجموعه دستی کدهای خطای عمومی | پیاده‌شده (غیرمرجع) |
+| `core/knowledge.py` | `ConfidenceLevel`، `Source`، `Claim`، `ObdProtocolId`، پروفایل خودرو/ECU، `claim_rows` | پیاده‌شده |
+| `database/vehicle_schema.py`, `database/vehicles.py` | اعتبارسنج سخت‌گیر بسته‌ها + `JsonVehicleKnowledgeBase` (همراه + محلی) | پیاده‌شده |
+| `database/data/vehicles/*.json` | بسته‌های ایران‌خودرو، سایپا، ام‌وی‌ام + `guidance.json` دوزبانه | پیاده‌شده (ادعاهای باس/ECU همه «نامعلوم») |
+| `diagnostics/vehicle_matcher.py` | `ObservedFacts`، `rank_candidates`، نرمال‌سازی پروتکل | پیاده‌شده (غیرفعال) |
+| `diagnostics/evidence_export.py` | بسته شواهد میدانی: پنهان‌سازی VIN، هش، ردیف‌های ارتقا | پیاده‌شده |
+| `ui/knowledge_view.py` | تب «پایگاه دانش خودرو» | پیاده‌شده |
 | `tuning/interfaces.py` | `CalibrationReader/Writer`, `BenchSafetyChecklist` | فقط قرارداد |
 | `app/cli.py`, `app/application.py` | CLI و سیم‌کشی | پیاده‌شده |
 | `app/dashboard.py` | `AppDashboardBackend`: انتخاب آداپتور برای حالت شبیه‌سازی/واقعی | پیاده‌شده |
@@ -232,6 +240,38 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
   کد خطا را به‌عنوان مرجع قطعی تعبیر نکند.
 - جایگزینی آینده (SQLite، پارس A2L/DAMOS) فقط با تعریف وابستگی جدید و تأیید تیم انجام می‌شود.
 
+### ۷٫۱ پایگاه دانش خودرو و ECU (Milestone 5)
+
+```
+database/data/vehicles/<manufacturer>.json ─► vehicle_schema.parse_pack() ─► core.knowledge (Claim, VehicleProfile)
+                                                                              │
+             diagnostics.vehicle_matcher.rank_candidates(profiles, ObservedFacts) ◄─ جلسه OBD/UDS (فقط خواندنی)
+             diagnostics.evidence_export.build_evidence_bundle(...) ─► evidence/<bundle>.json ─► بازبینی ─► ادعای verified
+```
+
+- **هر ادعا یک `Claim`** است: `value`، `confidence` (`verified` > `documented` > `reported` >
+  `unverified` > `unknown`)، `source` (شناسه یک `Source` در همان بسته)، `notes`، `verify` (کلید
+  راهنمای بررسی میدانی در `guidance.json`) و برای `verified` یک `evidence` (مسیر بسته شواهد + SHA-256).
+- **«نامعلوم» صریح است:** `unknown` یعنی `value: null`، بدون منبع، با راهنمای بررسی. فهرست خالی
+  (`[]`) یعنی «چیزی ثبت نشده» و در CLI و داشبورد «نامعلوم» نمایش داده می‌شود.
+- **ماتریس منبع ↔ اطمینان:** `verified` فقط با `field_evidence`؛ `documented` با نشریه سازنده؛
+  `reported` با مرجع عمومی معتبر؛ `unverified` با گزارش انجمن یا فرضیه پروژه. **استاندارد هیچ ادعای
+  خاص خودرو را مستند نمی‌کند** (ISO 15765-4 می‌گوید CAN روی OBD چیست، نه اینکه پارس از آن استفاده می‌کند).
+- **اعتبارسنج سخت‌گیر** (`database/vehicle_schema.py`، فقط کتابخانه استاندارد، بدون `jsonschema`):
+  کلید ناشناخته، مقدار جایگزین («TBD»، «n/a»، «?»، شناسه صفر)، شناسه CAN بیش از ۱۱ بیت، سرعت CAN
+  متناقض با پروتکل، الگوی غیر glob، منبع استفاده‌نشده و سرویس غیرخواندنی برای PID اختصاصی را رد می‌کند و
+  مسیر JSON خطا را نام می‌برد.
+- **بسته‌های محلی:** `knowledge_dir/vehicles/*.json` خودرو یا سازنده هم‌شناسه را جایگزین می‌کند (با لاگ).
+  پایگاه دانش در زمان اجرا هیچ فایلی نمی‌نویسد (تست AST).
+- **تطبیق غیرفعال:** فقط آنچه جلسه قبلاً خوانده مقایسه می‌شود؛ ادعای `unknown` هیچ امتیازی نمی‌دهد؛
+  تطبیق فقط پروتکل حداکثر «ضعیف (فقط سازگار)» است؛ مغایرت با ادعای `verified`/`documented` در WMI یا
+  لایه فیزیکی، نامزد را حذف می‌کند. خروجی «سازگار با مشاهدات» است، نه شناسایی.
+- **بسته شواهد میدانی:** فقط‌خواندنی، با `content_sha256`؛ داده شبیه‌سازی‌شده با
+  `usable_for_verification: false` برچسب می‌خورد. پنهان‌سازی VIN پیش‌فرض است و «بسته به‌صورت
+  fail-closed» عمل می‌کند: اگر VIN یا هگز شماره سریالش در خروجی بماند، خروجی ساخته نمی‌شود.
+- تست `tests/unit/test_vehicle_database.py` برای هر ادعای `verified` بسته شواهدش را باز می‌کند و بررسی
+  می‌کند که هش درست باشد، بسته شبیه‌سازی‌شده نباشد و مقدار ادعا واقعاً مشاهده شده باشد.
+
 ## ۸. نقاط توسعه
 
 **افزودن PID جدید:** ورودی به `core/pids.py` (`PID_CATALOG`) با شناسه در فرم درخواست، نام،
@@ -249,6 +289,9 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 **افزودن داده دانش:** یک `dtc_catalog.json` در پوشه‌ای خارج از مخزن (یا `knowledge/local/`)
 و تنظیم `knowledge_dir`. برای انتشار در بسته، ورودی‌ها را با ذکر منبع به
 `src/iran_obd_tuner/database/data/dtc_catalog.json` اضافه کنید.
+
+**افزودن خودرو یا ادعای جدید:** فقط ویرایش JSON در `database/data/vehicles/` (یا بسته محلی در
+`knowledge_dir/vehicles/`)؛ بدون تغییر کد پایتون. راهنمای کامل در `docs/development.md` (بخش ۵-ج).
 
 **افزودن قابلیت نوشتنی:** مجاز نیست تا زمانی که بخش ۵ برآورده شود؛ در آن صورت رابط در
 `tuning/interfaces.py` پیاده و همه مسیرها از `assert_write_allowed()` عبور کنند.
@@ -289,6 +332,12 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۳۱ | (Milestone 4) `virtual-sim` = باس `virtual` python-can + سرور ECU شبیه‌سازی؛ رابط واقعی بدون کانال خطا می‌دهد و هرگز به شبیه‌ساز برنمی‌گردد | داده شبیه‌سازی از منبع (لینک) برچسب می‌خورد، نه از مقدار | حدس شبیه‌سازی از مقدار VIN |
 | ۳۲ | (Milestone 4) خروجی `uds-ident` یک سند JSON جدا (`kind: uds_ecu_identification`، `schema_version: 1`)؛ `DiagnosticReport` نسخه ۲ دست‌نخورده | گزارش OBD و شناسایی UDS دو جریان مستقل‌اند | افزودن بخش UDS به گزارش و افزایش نسخه |
 | ۳۳ | (Milestone 4) `VehicleInfo.vin_source` (`obd_09` / `uds_f190`) | منبع VIN باید قابل ردیابی باشد. این فیلد به `vehicle` در گزارش نسخه ۲ **اضافه** شده است (افزودنی؛ کلید قبلی حذف یا تغییر نکرده)، پس نسخه افزایش نیافت | نسخه ۳ برای یک کلید اختیاری |
+| ۳۴ | (Milestone 5) مدل ادعا و سطح اطمینان در `core/knowledge.py` (نه `database`) | `ui` اجازه import از `database` ندارد ولی باید پروفایل‌ها را نمایش دهد؛ مدل‌ها فقط کتابخانه استاندارد‌اند | تعریف مدل‌ها در `database` و تبدیل به dict برای UI |
+| ۳۵ | (Milestone 5) اعتبارسنج پایتونی واحد به‌جای JSON Schema | بدون وابستگی جدید (`jsonschema`)، یک منبع حقیقت، پیام خطا با مسیر JSON، قواعد بین‌فیلدی (سرعت در برابر پروتکل، ماتریس منبع) | فایل JSON Schema + اعتبارسنج پایتونی موازی (دو منبع حقیقت) |
+| ۳۶ | (Milestone 5) `verified` فقط با بسته شواهد میدانی در `evidence/` که هش، غیرشبیه‌سازی‌بودن و برابری مقدار آن را تست بررسی می‌کند | ادعای «تأییدشده» باید از روی فایل قابل بازتولید باشد | پذیرش `verified` با توضیح متنی |
+| ۳۷ | (Milestone 5) الگوهای شماره قطعه/نسخه با glob (`fnmatchcase`)، نه regex | خوانا برای بازبین، بدون خطر ReDoS، کافی برای پیشوندها | regex کامل |
+| ۳۸ | (Milestone 5) پنهان‌سازی VIN در بسته شواهد پیش‌فرض و fail-closed؛ پاسخ درخواست‌های VIN (`0902`، `22 F1 90` و فریم‌های ISO-TP آن) کامل جایگزین می‌شود | VIN داده شخصی است؛ هگز آن در فریم‌های چندتایی پخش می‌شود و ماسک متنی کافی نیست | فقط ماسک متن ASCII |
+| ۳۹ | (Milestone 5) تطبیق غیرفعال با امتیاز نرمال‌نشده و سقف «ضعیف» برای تطبیق فقط پروتکل | نیمی از خودروها CAN 500k دارند؛ تطبیق پروتکل نباید شبیه شناسایی دیده شود | نرمال‌سازی روی سیگنال‌های موجود |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
@@ -361,7 +410,7 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 
 ## ۱۰. خارج از محدوده این نسخه
 
-- آداپتور CAN مستقیم، ISO-TP و UDS (`python-can`, `can-isotp`, `udsoncan`) — فاز ۲
 - هر نوع نوشتن/فلش/Security Access
-- نرمال‌سازی/دیتابیس ECU و نقشه‌ها (A2L/DAMOS)
+- نقشه‌ها و تعاریف کالیبراسیون (A2L/DAMOS) — فاز ۴
+- ارتقای خودکار ادعاها از روی بسته شواهد (ارتقا یک ویرایش بازبینی‌شده JSON است)
 - ضبط بلندمدت Live Data، چند-خودرویی، شبکه/همگام‌سازی ابری
