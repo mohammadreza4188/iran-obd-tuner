@@ -29,6 +29,7 @@ from __future__ import annotations
 import html
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,6 +56,7 @@ from PySide6.QtWidgets import (
 
 from iran_obd_tuner import __version__
 from iran_obd_tuner.core.exceptions import (
+    EvidenceExportError,
     IranObdTunerError,
     SafetyGuardError,
     UnsupportedOperationError,
@@ -62,6 +64,7 @@ from iran_obd_tuner.core.exceptions import (
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import VehicleInfo
 from iran_obd_tuner.diagnostics.ecu_identification import EcuIdentification
+from iran_obd_tuner.diagnostics.evidence_export import build_evidence_bundle, write_bundle
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot, PidStatus
 from iran_obd_tuner.diagnostics.models import (
     DtcCategoryResult,
@@ -69,11 +72,13 @@ from iran_obd_tuner.diagnostics.models import (
     MonitorStatusResult,
 )
 from iran_obd_tuner.diagnostics.recorder import CsvRecorder
+from iran_obd_tuner.diagnostics.vehicle_matcher import ObservedFacts, rank_candidates
 from iran_obd_tuner.ui.backend import DashboardBackend
 from iran_obd_tuner.ui.diagnostics_view import DiagnosticsView
 from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
 from iran_obd_tuner.ui.icon import build_icon
+from iran_obd_tuner.ui.knowledge_view import KnowledgeView
 from iran_obd_tuner.ui.performance_view import FAST_POLL_PIDS, PerformanceView
 from iran_obd_tuner.ui.safety_modal import SafetyModal
 from iran_obd_tuner.ui.traffic_view import TrafficView
@@ -328,13 +333,24 @@ class MainWindow(QMainWindow):
         tab_row = QHBoxLayout()
         tab_row.setSpacing(8)
         self.tab_buttons: list[QPushButton] = []
-        self.tab_ids = ["dashboard", "graph", "diag", "perf", "ident", "bench", "settings", "log"]
+        self.tab_ids = [
+            "dashboard",
+            "graph",
+            "diag",
+            "perf",
+            "ident",
+            "kb",
+            "bench",
+            "settings",
+            "log",
+        ]
         self.tab_icons = {
             "dashboard": "📊",
             "graph": "📈",
             "diag": "⚠️",
             "perf": "⏱️",
             "ident": "📡",
+            "kb": "📚",
             "bench": "🛠️",
             "settings": "⚙️",
             "log": "📝",
@@ -479,6 +495,21 @@ class MainWindow(QMainWindow):
         ident_scroll.setWidget(ident_page)
         self.stack.addWidget(ident_scroll)
 
+        # Vehicle knowledge base: browse claims, passive match, Field Evidence Bundle export
+        self.kb_view = KnowledgeView(
+            self._backend.vehicle_profiles,
+            self._backend.vehicle_manufacturers,
+            self._backend.vehicle_guidance,
+            self._backend.vehicle_knowledge_source,
+        )
+        self.kb_view.match_requested.connect(self._match_vehicle)
+        self.kb_view.export_requested.connect(self._export_evidence)
+        kb_scroll = QScrollArea()
+        kb_scroll.setWidgetResizable(True)
+        kb_scroll.setFrameShape(QFrame.NoFrame)
+        kb_scroll.setWidget(self.kb_view)
+        self.stack.addWidget(kb_scroll)
+
         # Bench (not implemented: disabled placeholders that say so)
         bench_page = QWidget()
         bench_layout = QVBoxLayout(bench_page)
@@ -596,6 +627,7 @@ class MainWindow(QMainWindow):
         self.ident_btn.setText(t["ident_btn"])
         self.ident_obd_title.setText(t["ident_obd_title"])
         self.uds_view.set_language(self.lang)
+        self.kb_view.set_language(self.lang)
         self.bench_title.setText(t["bench_title"])
         self.bench_warning.setText(t["bench_warning"])
         self.bench_btn_read.setText(t["bench_btn_read"])
@@ -732,6 +764,7 @@ class MainWindow(QMainWindow):
         self._update_status_pill()
         self.diag_view.set_connected(True)
         self.perf_view.set_connected(True)
+        self._refresh_kb_availability()
         self._refresh_dtc()
         self._tick()
         self.timer.start()
@@ -778,6 +811,7 @@ class MainWindow(QMainWindow):
         self.perf_view.set_connected(False)
         self._render_mil()
         self._render_identification()
+        self._refresh_kb_availability()
         if session is not None:
             self._append_log("msg.disconnected")
 
@@ -954,6 +988,7 @@ class MainWindow(QMainWindow):
             self._ident_state = result
             self._append_log("msg.ident_read", result.vin or "-")
         self._render_identification()
+        self._refresh_kb_availability()
 
     def _render_identification(self) -> None:
         t = COPY[self.lang]
@@ -1020,11 +1055,123 @@ class MainWindow(QMainWindow):
         self.uds_view.set_busy(False)
         self.uds_view.show_result(result)
         self._append_log("msg.uds_read", result.interface, result.vin or "-")
+        self._refresh_kb_availability()
 
     def _on_uds_failed(self, error: BaseException) -> None:
         self.uds_view.set_busy(False)
         self.uds_view.show_error(_describe(error))
         self._append_log("msg.uds_error", _describe(error))
+        self._refresh_kb_availability()
+
+    # ------------------------------------------------------------ vehicle knowledge
+    def _uds_result(self) -> EcuIdentification | None:
+        result = self.uds_view.result
+        return result if isinstance(result, EcuIdentification) else None
+
+    def _vehicle_info(self) -> VehicleInfo | None:
+        state = self._ident_state
+        return state if isinstance(state, VehicleInfo) else None
+
+    def _refresh_kb_availability(self) -> None:
+        available = (
+            self._session is not None
+            or self._uds_result() is not None
+            or self._vehicle_info() is not None
+        )
+        self.kb_view.set_session_available(available)
+
+    def _gather_session(
+        self, then: Callable[[str | None, tuple[str, ...], bool, str | None], None]
+    ) -> None:
+        """Read protocol and supported PIDs on the worker (no request is sent), then call back.
+
+        Without an OBD session the callback runs at once with empty OBD facts.
+        """
+        session = self._session
+        if session is None:
+            then(None, (), False, None)
+            return
+        generation = self._generation
+
+        def job() -> tuple[str | None, tuple[str, ...]]:
+            try:
+                pids = session.supported_pids()
+            except IranObdTunerError:
+                pids = ()
+            return session.active_protocol, pids
+
+        def done(result: tuple[str | None, tuple[str, ...]]) -> None:
+            if generation == self._generation:
+                then(result[0], result[1], session.simulated, session.adapter_info.name)
+
+        self._runner.submit(job, done, self._on_kb_failed)
+
+    def _match_vehicle(self) -> None:
+        self._gather_session(self._on_match_data)
+
+    def _on_match_data(
+        self, protocol: str | None, pids: tuple[str, ...], simulated: bool, _adapter: str | None
+    ) -> None:
+        facts = ObservedFacts.from_session(
+            vehicle_info=self._vehicle_info(),
+            active_protocol=protocol,
+            supported_pids=pids,
+            identification=self._uds_result(),
+            simulated=simulated,
+        )
+        report = rank_candidates(
+            self._backend.vehicle_profiles,
+            facts,
+            self._backend.vehicle_manufacturers,
+            knowledge_source=self._backend.vehicle_knowledge_source,
+        )
+        self.kb_view.show_match(report)
+        self._append_log("msg.kb_match", len(report.candidates))
+
+    def _on_kb_failed(self, error: BaseException) -> None:
+        self.kb_view.show_match_error(_describe(error))
+        self._append_log("msg.kb_error", _describe(error))
+
+    def _export_evidence(self) -> None:
+        self._gather_session(self._write_evidence)
+
+    def _write_evidence(
+        self, protocol: str | None, pids: tuple[str, ...], simulated: bool, adapter: str | None
+    ) -> None:
+        t = COPY[self.lang]
+        uds = self._uds_result()
+        any_simulated = simulated or bool(uds is not None and uds.simulated)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        suffix = "_simulated" if any_simulated else ""
+        default_path = self._backend.output_dir / f"evidence_{stamp}{suffix}.json"
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, t["kb_export_dialog"], str(default_path), t["kb_export_filter"]
+        )
+        if not chosen:
+            return
+        log = self._backend.traffic_log
+        try:
+            bundle = build_evidence_bundle(
+                tool_version=__version__,
+                vehicle_info=self._vehicle_info(),
+                adapter_name=adapter,
+                active_protocol=protocol,
+                supported_pids=pids,
+                obd_simulated=simulated,
+                identification=uds,
+                traffic=log.snapshot(),
+                dropped_traffic=log.dropped_count,
+                operator=self.kb_view.operator_context(),
+                knowledge=self._backend.vehicle_profiles,
+                redact_vin=self.kb_view.redact_vin(),
+            )
+            path = write_bundle(Path(chosen), bundle)
+        except EvidenceExportError as exc:
+            self.kb_view.show_export_error(str(exc))
+            self._append_log("msg.kb_export_error", exc)
+            return
+        self.kb_view.show_export_result(str(path), bundle.simulated)
+        self._append_log("msg.kb_export", path)
 
     # ------------------------------------------------------------ recording
     def _toggle_recording(self) -> None:

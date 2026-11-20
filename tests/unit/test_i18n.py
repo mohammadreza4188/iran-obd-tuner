@@ -23,7 +23,13 @@ WINDOW_SOURCE = (UI_DIR / "main_window.py").read_text(encoding="utf-8")
 MODAL_SOURCE = (UI_DIR / "safety_modal.py").read_text(encoding="utf-8")
 VIEW_SOURCES = "".join(
     (UI_DIR / name).read_text(encoding="utf-8")
-    for name in ("diagnostics_view.py", "traffic_view.py", "performance_view.py", "uds_view.py")
+    for name in (
+        "diagnostics_view.py",
+        "traffic_view.py",
+        "performance_view.py",
+        "uds_view.py",
+        "knowledge_view.py",
+    )
 )
 
 
@@ -103,7 +109,7 @@ def test_every_log_message_used_by_the_window_exists() -> None:
 
 def test_gauge_tab_and_status_keys_exist() -> None:
     gauge_keys = re.findall(r'GaugeSpec\("(\w+)", "\w+", "(\w+)"', WINDOW_SOURCE)
-    tab_ids = re.search(r"self\.tab_ids = \[(.*?)\]", WINDOW_SOURCE)
+    tab_ids = re.search(r"self\.tab_ids = \[(.*?)\]", WINDOW_SOURCE, re.DOTALL)
     status_keys = re.findall(r'PidStatus\.\w+: "(\w+)"', WINDOW_SOURCE)
 
     assert len(gauge_keys) == 8

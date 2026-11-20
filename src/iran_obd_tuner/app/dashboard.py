@@ -8,6 +8,8 @@ Implements :class:`iran_obd_tuner.ui.backend.DashboardBackend`: this is where th
 * UDS identification → :class:`UdsIdentificationSession` over the CAN interface the user
   chose (``virtual-sim`` = the simulated ECU), with the identifiers and padding from the
   settings; the extended session only when the user ticked it for this run.
+* Vehicle knowledge base → the bundled vehicle packs plus ``knowledge_dir/vehicles``, loaded
+  once (read-only) for the Vehicle Knowledge tab.
 * Real adapter → the read-only ``elm327`` adapter on the port the user selected, with the
   baud rate and command timeout from the settings. Without an explicit port the request
   fails with :class:`~iran_obd_tuner.core.exceptions.ConfigurationError` (no automatic
@@ -16,13 +18,16 @@ Implements :class:`iran_obd_tuner.ui.backend.DashboardBackend`: this is where th
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from iran_obd_tuner.app.application import uds_link_config
 from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings
 from iran_obd_tuner.core.exceptions import ConfigurationError
+from iran_obd_tuner.core.knowledge import LocalizedText, Manufacturer, VehicleProfile
 from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository, KnowledgeRepository
+from iran_obd_tuner.database.vehicles import JsonVehicleKnowledgeBase, VehicleKnowledgeBase
 from iran_obd_tuner.diagnostics.dyno import VehicleParameters
 from iran_obd_tuner.diagnostics.ecu_identification import UdsIdentificationSession
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
@@ -51,10 +56,16 @@ class AppDashboardBackend:
         self,
         settings: AppSettings,
         knowledge: KnowledgeRepository | None = None,
+        vehicle_knowledge: VehicleKnowledgeBase | None = None,
     ) -> None:
         self._settings = settings
         self._knowledge = (
             knowledge if knowledge is not None else JsonKnowledgeRepository(settings.knowledge_dir)
+        )
+        self._vehicles = (
+            vehicle_knowledge
+            if vehicle_knowledge is not None
+            else JsonVehicleKnowledgeBase(settings.knowledge_dir)
         )
         # One log for the whole dashboard: every session's adapter records into it.
         self._traffic_log = TrafficLog()
@@ -105,6 +116,22 @@ class AppDashboardBackend:
             channel=s.can_channel,
             bitrate=s.can_bitrate,
         )
+
+    @property
+    def vehicle_profiles(self) -> tuple[VehicleProfile, ...]:
+        return self._vehicles.vehicles()
+
+    @property
+    def vehicle_manufacturers(self) -> tuple[Manufacturer, ...]:
+        return self._vehicles.manufacturers()
+
+    @property
+    def vehicle_guidance(self) -> Mapping[str, LocalizedText]:
+        return self._vehicles.guidance_catalog()
+
+    @property
+    def vehicle_knowledge_source(self) -> str:
+        return self._vehicles.source
 
     def create_uds_session(
         self,

@@ -31,6 +31,7 @@ from iran_obd_tuner import __version__  # noqa: E402
 from iran_obd_tuner.app.dashboard import AppDashboardBackend  # noqa: E402
 from iran_obd_tuner.core.config import AppSettings  # noqa: E402
 from iran_obd_tuner.core.exceptions import AdapterConnectionError  # noqa: E402
+from iran_obd_tuner.core.knowledge import ConfidenceLevel  # noqa: E402
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository  # noqa: E402
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot  # noqa: E402
 from iran_obd_tuner.hardware.base import ObdAdapter  # noqa: E402
@@ -144,7 +145,7 @@ def _log_texts(window: MainWindow) -> list[str]:
 def test_window_builds_offline(window: MainWindow, backend: TestBackend) -> None:
     assert window.windowTitle() == COPY["fa"]["title"]
     assert len(window.gauges) == 8
-    assert len(window.tab_buttons) == 8
+    assert len(window.tab_buttons) == 9
     assert window.connected is False
     assert window.timer.isActive() is False
     assert backend.sessions_created == 0  # constructing the window opens nothing
@@ -735,3 +736,181 @@ def test_uds_panel_is_translated(window: MainWindow) -> None:
     window.lang_combo.setCurrentIndex(1)
     assert view.read_btn.text() == COPY["en"]["uds_read_btn"]
     assert view.interface_combo.itemText(0) == COPY["en"]["uds_iface_sim"]
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 5: Vehicle Knowledge tab
+# --------------------------------------------------------------------------- #
+
+FIXTURE_PACKS = Path(__file__).resolve().parents[1] / "fixtures" / "vehicle_packs"
+
+
+@pytest.fixture
+def fixture_window(qt_app: QApplication, tmp_path: Path) -> Iterator[MainWindow]:
+    """A window whose knowledge base also holds the fictional fixture packs."""
+    from iran_obd_tuner.database.vehicles import JsonVehicleKnowledgeBase
+
+    backend = TestBackend(tmp_path / "output")
+    backend._vehicles = JsonVehicleKnowledgeBase(FIXTURE_PACKS)
+    win = MainWindow(backend)
+    qt_app.processEvents()
+    yield win
+    win.close()
+
+
+def _claims(window: MainWindow) -> dict[str, tuple[str, str, str]]:
+    """Claims table rows: field label -> (value, badge text, badge level)."""
+    table = window.kb_view.claims_table
+    rows = {}
+    for row in range(table.rowCount()):
+        badge = table.item(row, 2)
+        rows[table.item(row, 0).text()] = (
+            table.item(row, 1).text(),
+            badge.text(),
+            badge.data(Qt.ItemDataRole.UserRole),
+        )
+    return rows
+
+
+def test_knowledge_tab_browses_profiles_with_confidence_badges(window: MainWindow) -> None:
+    from iran_obd_tuner.ui.knowledge_view import CONFIDENCE_COLORS
+
+    window.lang_combo.setCurrentIndex(1)  # English
+    window._switch_tab("kb")
+    view = window.kb_view
+    assert window.stack.currentWidget().widget() is view
+    assert view.tree.topLevelItemCount() == 3
+    assert view.header_label.text() == COPY["en"]["kb_select_hint"]
+
+    assert view.select_variant("ikco.peugeot_pars", "tu5")
+    assert view.header_label.text() == "Peugeot Pars — Pars TU5"
+    claims = _claims(window)
+    assert claims["Vehicle / Engine"] == ("TU5JP4", "Reported", "reported")
+    assert claims["OBD port / OBD physical layer / protocol"] == ("unknown", "Unknown", "unknown")
+    assert claims["ECU (engine) / Request ID (TX)"][2] == "unknown"
+    assert claims["ECU (engine) / UDS DIDs"][0] == COPY["en"]["kb_nothing_recorded"]
+    badge = view.claims_table.item(0, 2)
+    assert badge.background().color().name() == CONFIDENCE_COLORS[ConfidenceLevel.REPORTED]
+    notes = view.claims_table.item(2, 4).text()  # obd_physical_layer
+    assert "How to verify:" in notes and "AT DPN" in notes
+    assert view.claims_table.item(0, 3).text() == "Peugeot Pars · Wikipedia (English)"
+    assert "https://en.wikipedia.org/wiki/Peugeot_Pars" in view.claims_table.item(0, 3).toolTip()
+    assert [view.legend_badges[level].text() for level in ConfidenceLevel] == [
+        "Verified",
+        "Documented",
+        "Reported",
+        "Unverified",
+        "Unknown",
+    ]
+
+
+def test_knowledge_tab_filters_and_is_bilingual(window: MainWindow) -> None:
+    view = window.kb_view
+    view.select_variant("saipa.tiba", "m15")
+    assert window.layoutDirection() == LAYOUT_RTL
+    assert "تیبا" in view.header_label.text()
+    assert _claims(window)["خودرو / موتور"] == ("M15", "گزارش‌شده", "reported")
+    assert view.legend_badges[ConfidenceLevel.UNKNOWN].text() == "نامعلوم"
+
+    view.manufacturer_combo.setCurrentIndex(view.manufacturer_combo.findData("ikco"))
+    assert view.tree.topLevelItemCount() == 1
+    assert view.selected is None  # Tiba is filtered out
+    window.lang_combo.setCurrentIndex(1)
+    assert window.layoutDirection() == LAYOUT_LTR
+    assert view.manufacturer_combo.currentText() == "Iran Khodro (IKCO)"
+
+
+def test_match_and_export_need_session_data(window: MainWindow) -> None:
+    view = window.kb_view
+    assert not view.match_btn.isEnabled() and not view.export_btn.isEnabled()
+    assert view.match_btn.toolTip() == COPY["fa"]["kb_match_unavailable"]
+    _connect_simulation(window)
+    assert view.match_btn.isEnabled() and view.export_btn.isEnabled()
+    window.connect_btn.click()
+    settle(window)
+    assert not view.match_btn.isEnabled()
+
+
+def test_match_on_a_simulated_session_is_labelled_and_honest(window: MainWindow) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    window.kb_view.match_btn.click()
+    settle(window)
+    report = window.kb_view.match_report
+    assert report is not None and not isinstance(report, str)
+    assert report.simulated
+    assert report.facts.protocol_id is not None  # the simulator's CAN spelling is understood
+    assert report.candidates == ()  # bundled packs: bus facts are unknown, nothing to compare
+    status = window.kb_view.match_status.text()
+    assert COPY["en"]["kb_match_simulated"] in status
+    assert COPY["en"]["kb_match_none"] in status
+    assert any("Vehicle match: 0 candidate(s)" in line for line in _log_texts(window))
+
+
+def test_match_ranks_fixture_profiles_from_obd_and_uds(fixture_window: MainWindow) -> None:
+    pytest.importorskip("can", reason="needs the optional [can] extra")
+    window = fixture_window
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    window.uds_view.read_btn.click()
+    settle(window)
+    window.kb_view.match_btn.click()
+    settle(window)
+    report = window.kb_view.match_report
+    assert report is not None and not isinstance(report, str)
+    best = report.best
+    assert best is not None and best.key == "fixturemotors.alpha/can"
+    assert window.kb_view.match_table.item(0, 1).text() == "Fixture Alpha - Alpha CAN"
+    assert "Part number: match" in window.kb_view.match_table.item(0, 4).text()
+
+
+def test_export_writes_a_redacted_simulated_bundle(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    target = tmp_path / "bundle.json"
+    offered: list[str] = []
+
+    def fake_dialog(_parent: object, _title: str, default: str, _filter: str):
+        offered.append(default)
+        return str(target), _filter
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(fake_dialog))
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    window._read_identification()
+    settle(window)
+    view = window.kb_view
+    assert view.set_claimed_variant("ikco.peugeot_pars", "tu5")
+    assert not view.set_claimed_variant("ikco.nothing", "x")
+    view.model_year_edit.setText("1400")
+    assert view.redact_check.isChecked()  # privacy by default
+    view.export_btn.click()
+    settle(window)
+
+    assert offered[0].endswith("_simulated.json")
+    text = target.read_text(encoding="utf-8")
+    assert "SIMULATEDVIN00001" not in text
+    doc = json.loads(text)
+    assert doc["kind"] == "field_evidence_bundle"
+    assert doc["simulated"] is True and doc["usable_for_verification"] is False
+    assert doc["obd"]["vin"] == "SIMULATEDVI******"
+    assert doc["operator_context"]["vehicle_id"] == "ikco.peugeot_pars"
+    assert doc["operator_context"]["model_year"] == "1400"
+    assert doc["traffic"]["entries"], "the simulator exchanges are included"
+    rows = {row["claim"]: row for row in doc["promotion_candidates"]}
+    assert rows["ikco.peugeot_pars/tu5:obd_physical_layer"]["current_confidence"] == "unknown"
+    assert str(target) in view.export_status.text()
+    assert "SIMULATED" in view.export_status.text()
+
+
+def test_export_cancelled_writes_nothing(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *_args: ("", "")))
+    _connect_simulation(window)
+    window.kb_view.export_btn.click()
+    settle(window)
+    assert window.kb_view.export_status.text() == ""
+    assert list(tmp_path.glob("*.json")) == []

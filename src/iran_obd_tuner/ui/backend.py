@@ -11,10 +11,12 @@ extra.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from iran_obd_tuner.core.knowledge import LocalizedText, Manufacturer, VehicleProfile
 from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.diagnostics.dyno import VehicleParameters
 from iran_obd_tuner.diagnostics.ecu_identification import UdsIdentificationSession
@@ -64,6 +66,26 @@ class DashboardBackend(Protocol):
     @property
     def can_defaults(self) -> CanDefaults:
         """Initial choices of the UDS identification panel."""
+        ...
+
+    @property
+    def vehicle_profiles(self) -> tuple[VehicleProfile, ...]:
+        """Every vehicle of the (read-only) vehicle knowledge base."""
+        ...
+
+    @property
+    def vehicle_manufacturers(self) -> tuple[Manufacturer, ...]:
+        """Manufacturers of the vehicle knowledge base (with their WMI claims)."""
+        ...
+
+    @property
+    def vehicle_guidance(self) -> Mapping[str, LocalizedText]:
+        """Field-verification instructions (``verify.<name>``) in both languages."""
+        ...
+
+    @property
+    def vehicle_knowledge_source(self) -> str:
+        """Where the vehicle packs were loaded from."""
         ...
 
     def create_uds_session(

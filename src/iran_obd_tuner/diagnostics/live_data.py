@@ -155,6 +155,17 @@ class LiveDataSession:
         """Close the connection. Safe to call when not connected."""
         self._adapter.disconnect()
 
+    def supported_pids(self) -> tuple[str, ...]:
+        """Service 01 PIDs the vehicle declared (read-only).
+
+        The adapters derive these from the ``0100``/``0120``/... bitmasks they read while
+        connecting; no extra request is sent for this call.
+
+        Raises:
+            AdapterError: When not connected.
+        """
+        return self._adapter.read_supported_pids()
+
     def poll(self, pids: Sequence[str]) -> LiveSnapshot:
         """Read every parameter in ``pids`` once.
 
