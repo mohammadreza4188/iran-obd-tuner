@@ -217,7 +217,7 @@ class IsoTpChannel:
                     raise ProtocolError(f"ISO-TP: invalid single frame {frame.format()}")
                 return frame.data[1 : 1 + length]
             if kind == _FF:
-                result = self._receive_segmented(frame)
+                result = self.receive_segmented(frame)
                 if isinstance(result, bytes):
                     return result
                 frame = result  # the sender started over: process its new SF/FF
@@ -225,8 +225,12 @@ class IsoTpChannel:
             frame = self._next_frame(deadline)  # stray CF/FC frames are ignored
         return None
 
-    def _receive_segmented(self, first: CanFrame) -> bytes | CanFrame:
-        """Reassemble a segmented message; returns a new SF/FF if the sender restarts."""
+    def receive_segmented(self, first: CanFrame) -> bytes | CanFrame:
+        """Reassemble the message started by ``first`` (a First Frame already received).
+
+        Sends the flow control frames. Returns the payload, or the new Single/First Frame if
+        the sender started over (the caller then processes that frame instead).
+        """
         if len(first.data) < 8:
             raise ProtocolError(f"ISO-TP: truncated first frame {first.format()}")
         length = ((first.data[0] & 0x0F) << 8) | first.data[1]

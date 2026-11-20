@@ -134,3 +134,97 @@ def test_the_rules_above_actually_see_the_code() -> None:
     uses = _imports()
     assert any(use.layer == "ui" and use.module == "PySide6.QtWidgets" for use in uses)
     assert any(use.file == "hardware/serial_ports.py" and not use.module_level for use in uses)
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 4: CAN / UDS safety invariants
+# --------------------------------------------------------------------------- #
+
+#: UDS services that write, erase, reset, unlock or reprogram (see hardware/uds.py).
+WRITE_SIDS = {0x11, 0x14, 0x27, 0x28, 0x2E, 0x2F, 0x31, 0x34, 0x35, 0x36, 0x37, 0x3D, 0x85, 0x87}
+WRITE_SERVICE_NAMES = (
+    "ECUReset",
+    "ClearDiagnosticInformation",
+    "SecurityAccess",
+    "WriteDataByIdentifier",
+    "InputOutputControlByIdentifier",
+    "RoutineControl",
+    "RequestDownload",
+    "RequestUpload",
+    "TransferData",
+    "RequestTransferExit",
+)
+#: The only module allowed to name these services: the allowlist that refuses them.
+POLICY_MODULE = "hardware/uds.py"
+
+
+def _first_request_byte(node: ast.AST) -> int | None:
+    """First byte of a literal request: b"..", bytes([..]) or bytes.fromhex("..")."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, bytes) and node.value:
+        return node.value[0]
+    if isinstance(node, ast.Call) and node.args:
+        func, arg = node.func, node.args[0]
+        if (
+            isinstance(func, ast.Name)
+            and func.id == "bytes"
+            and isinstance(arg, (ast.List, ast.Tuple))
+        ):
+            first = arg.elts[0] if arg.elts else None
+            if isinstance(first, ast.Constant) and isinstance(first.value, int):
+                return first.value
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "fromhex"
+            and isinstance(arg, ast.Constant)
+            and isinstance(arg.value, str)
+            and len(arg.value.replace(" ", "")) >= 2
+        ):
+            return int(arg.value.replace(" ", "")[:2], 16)
+    return None
+
+
+def test_no_literal_request_starts_with_a_write_service() -> None:
+    offenders = []
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        relative = path.relative_to(PACKAGE_DIR).as_posix()
+        if relative == POLICY_MODULE:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            first = _first_request_byte(node)
+            if first in WRITE_SIDS and relative.startswith(("hardware/", "diagnostics/", "app/")):
+                offenders.append(f"{relative}:{node.lineno}")
+    assert offenders == []
+
+
+def test_write_service_names_appear_only_in_the_allowlist() -> None:
+    offenders = []
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        relative = path.relative_to(PACKAGE_DIR).as_posix()
+        text = path.read_text(encoding="utf-8")
+        if relative != POLICY_MODULE and any(name in text for name in WRITE_SERVICE_NAMES):
+            offenders.append(relative)
+    assert offenders == []
+
+
+def test_every_python_can_bus_names_its_interface_explicitly() -> None:
+    """python-can would otherwise take the interface from ~/.canrc or the environment."""
+    calls = []
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "Bus"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "can"
+            ):
+                keywords = {k.arg for k in node.keywords}
+                calls.append((path.name, "interface" in keywords))
+    assert calls and all(explicit for _name, explicit in calls), calls
+
+
+def test_can_libraries_stay_inside_hardware_functions() -> None:
+    for use in _imports():
+        top = use.module.split(".")[0]
+        if top in {"can", "isotp", "udsoncan"}:
+            assert use.layer == "hardware" and not use.module_level, use
