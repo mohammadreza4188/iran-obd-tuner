@@ -17,8 +17,9 @@ from iran_obd_tuner.diagnostics.models import DiagnosticReport
 from iran_obd_tuner.diagnostics.service import DiagnosticService
 from iran_obd_tuner.hardware.base import ObdAdapter
 from iran_obd_tuner.hardware.registry import create_adapter
+from iran_obd_tuner.hardware.uds_link import UdsLinkConfig
 
-__all__ = ["Application"]
+__all__ = ["Application", "uds_link_config"]
 
 
 class Application:
@@ -104,3 +105,27 @@ class Application:
         """
         self._log.debug("application: starting diagnostic run")
         return self._diagnostics.collect_report(pids=pids, read_vin=read_vin)
+
+
+def uds_link_config(
+    settings: AppSettings,
+    *,
+    interface: str | None = None,
+    channel: str | None = None,
+    bitrate: int | None = None,
+    request_id: int | None = None,
+    response_id: int | None = None,
+) -> UdsLinkConfig:
+    """UDS link configuration from the settings, with per-run overrides.
+
+    Raises:
+        ConfigurationError: For an unsupported interface or invalid identifiers.
+    """
+    return UdsLinkConfig(
+        interface=interface or settings.can_interface,
+        channel=channel if channel is not None else settings.can_channel,
+        bitrate=bitrate or settings.can_bitrate,
+        request_id=settings.uds_request_id if request_id is None else request_id,
+        response_id=settings.uds_response_id if response_id is None else response_id,
+        padding=settings.isotp_padding,
+    )

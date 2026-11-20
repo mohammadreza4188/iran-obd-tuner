@@ -5,6 +5,9 @@ Implements :class:`iran_obd_tuner.ui.backend.DashboardBackend`: this is where th
 
 * Simulation → the mock adapter with :meth:`MockScenario.drive_cycle` (time-varying values,
   ``AdapterInfo.simulated = True``).
+* UDS identification → :class:`UdsIdentificationSession` over the CAN interface the user
+  chose (``virtual-sim`` = the simulated ECU), with the identifiers and padding from the
+  settings; the extended session only when the user ticked it for this run.
 * Real adapter → the read-only ``elm327`` adapter on the port the user selected, with the
   baud rate and command timeout from the settings. Without an explicit port the request
   fails with :class:`~iran_obd_tuner.core.exceptions.ConfigurationError` (no automatic
@@ -15,11 +18,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from iran_obd_tuner.core.config import AppSettings
+from iran_obd_tuner.app.application import uds_link_config
+from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings
 from iran_obd_tuner.core.exceptions import ConfigurationError
 from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository, KnowledgeRepository
 from iran_obd_tuner.diagnostics.dyno import VehicleParameters
+from iran_obd_tuner.diagnostics.ecu_identification import UdsIdentificationSession
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 from iran_obd_tuner.hardware.mock import MockScenario
 from iran_obd_tuner.hardware.registry import (
@@ -28,6 +33,8 @@ from iran_obd_tuner.hardware.registry import (
     create_adapter,
 )
 from iran_obd_tuner.hardware.serial_ports import list_serial_ports
+from iran_obd_tuner.hardware.uds_link import SIMULATED_INTERFACE
+from iran_obd_tuner.ui.backend import CanDefaults
 
 __all__ = ["AppDashboardBackend"]
 
@@ -87,6 +94,34 @@ class AppDashboardBackend:
 
     def list_serial_ports(self) -> tuple[str, ...]:
         return list_serial_ports()
+
+    @property
+    def can_defaults(self) -> CanDefaults:
+        s = self._settings
+        return CanDefaults(
+            interfaces=CAN_INTERFACE_CHOICES,
+            simulated_interface=SIMULATED_INTERFACE,
+            interface=s.can_interface,
+            channel=s.can_channel,
+            bitrate=s.can_bitrate,
+        )
+
+    def create_uds_session(
+        self,
+        *,
+        interface: str,
+        channel: str | None,
+        bitrate: int,
+        allow_extended_session: bool,
+    ) -> UdsIdentificationSession:
+        config = uds_link_config(
+            self._settings, interface=interface, channel=channel or None, bitrate=bitrate
+        )
+        return UdsIdentificationSession(
+            config,
+            allow_extended_session=allow_extended_session,
+            traffic_log=self._traffic_log,
+        )
 
     def create_session(self, *, simulation: bool, port: str | None) -> LiveDataSession:
         if simulation:

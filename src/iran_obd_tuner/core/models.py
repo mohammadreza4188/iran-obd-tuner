@@ -11,12 +11,15 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-__all__ = ["Measurement", "Unit", "VehicleInfo", "utc_now"]
+__all__ = ["VIN_SOURCES", "Measurement", "Unit", "VehicleInfo", "utc_now"]
 
 # VIN is a 17 character vehicle identifier (ISO 3779). Only length and character set are
 # validated here; the check digit is not verified because some markets and some adapters
 # return non-conforming values that must still be displayed.
 VIN_LENGTH = 17
+
+#: Where a VIN came from: OBD-II service 09 PID 02, or UDS ReadDataByIdentifier F190.
+VIN_SOURCES: tuple[str, ...] = ("obd_09", "uds_f190")
 
 
 def utc_now() -> datetime:
@@ -93,15 +96,22 @@ class VehicleInfo:
         protocol: Protocol reported by the adapter, e.g. ``"ISO 15765-4 CAN"``.
         adapter_name: Registry name of the adapter that produced the data.
         simulated: ``True`` when the data comes from a simulator rather than a vehicle.
+        vin_source: How the VIN was read (one of :data:`VIN_SOURCES`); ``None`` exactly
+            when there is no VIN.
     """
 
     vin: str | None = None
     protocol: str | None = None
     adapter_name: str | None = None
     simulated: bool = False
+    vin_source: str | None = None
 
     def __post_init__(self) -> None:
+        if self.vin_source is not None and self.vin_source not in VIN_SOURCES:
+            raise ValueError(f"vin_source must be one of {VIN_SOURCES}, got {self.vin_source!r}")
         if self.vin is None:
+            if self.vin_source is not None:
+                raise ValueError("vin_source is only meaningful with a vin")
             return
         vin = self.vin.strip().upper()
         if len(vin) != VIN_LENGTH or not vin.isalnum():
@@ -115,4 +125,5 @@ class VehicleInfo:
             "protocol": self.protocol,
             "adapter_name": self.adapter_name,
             "simulated": self.simulated,
+            "vin_source": self.vin_source,
         }

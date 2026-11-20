@@ -5,16 +5,20 @@ on:
     branches: [main]
   pull_request:
 
-# The core package is standard-library only, so every check below runs without hardware,
-# without an OBD adapter and without the GUI or CAN dependency stacks.
-# The [obd], [can], [bench] and [gui] extras are deliberately NOT installed here: they pull
-# in compiled/GUI wheels and can only be validated manually, see docs/development.md.
-# Consequence: tests/integration/test_gui_window.py (PySide6) reports as skipped in CI; it was
-# verified locally on Windows with QT_QPA_PLATFORM=offscreen and a real PySide6 install.
+# Every check below runs without hardware: no OBD adapter, no CAN interface, no vehicle.
+#
+# * "checks" installs the [can] extra (python-can, pure Python) so the ISO-TP / UDS tests run
+#   end to end over python-can's in-process "virtual" bus against the simulated ECU. Nothing
+#   in the test suite opens a physical CAN interface.
+# * "no-extras" installs only [dev] and proves the package and its tests still work when the
+#   optional dependencies are missing (those tests skip, the rest must pass).
+#
+# The [gui] extra (PySide6) is not installed: tests/integration/test_gui_window.py reports as
+# skipped in CI and is verified locally with QT_QPA_PLATFORM=offscreen (docs/development.md).
 
 jobs:
   checks:
-    name: lint, format, tests (py${{ matrix.python-version }})
+    name: lint, format, tests with [can] (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,16 +31,34 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install package and development tools
+      - name: Install package, development tools and the [can] extra
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,can]"
 
       - name: Lint
         run: python -m ruff check .
 
       - name: Format check
         run: python -m ruff format --check .
+
+      - name: Tests
+        run: python -m pytest -q
+
+  no-extras:
+    name: tests without optional extras (py3.11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and development tools only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
 
       - name: Tests
         run: python -m pytest -q

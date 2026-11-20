@@ -35,7 +35,7 @@
 
 | قابلیت | محل |
 |---|---|
-| ورودی خط فرمان با دستورات `version`, `adapters`, `config`, `diagnose` | `src/iran_obd_tuner/app/cli.py` |
+| ورودی خط فرمان با دستورات `version`, `adapters`, `config`, `diagnose`, `uds-ident` | `src/iran_obd_tuner/app/cli.py` |
 | بارگذاری تنظیمات: پیش‌فرض ← فایل TOML ← متغیرهای محیطی | `src/iran_obd_tuner/core/config.py` |
 | راه‌اندازی لاگ استاندارد (stderr و فایل اختیاری) | `src/iran_obd_tuner/core/logging.py` |
 | مدل‌های داده (Measurement/Unit/VehicleInfo) و کاتالوگ PID | `core/models.py`, `core/pids.py` |
@@ -51,6 +51,10 @@
 | Freeze Frame شماره ۰۰ (سرویس ۰۲): کد عامل و ۸ پارامتر؛ پارامتر ذخیره‌نشده با «—» | `src/iran_obd_tuner/diagnostics/service.py`, `ui/diagnostics_view.py` |
 | نمایشگر ترافیک خام آداپتور (TX/RX) در زیرتب «رویدادها»، با توقف نمایش، پاک کردن و کپی؛ بافر محدود و ایمن برای چند thread. شبیه‌ساز فقط درخواست و مقدار decodeشده را با برچسب «شبیه‌سازی» ثبت می‌کند، نه فریم هگز ساختگی | `src/iran_obd_tuner/core/traffic.py`, `ui/traffic_view.py` |
 | تب «عملکرد»: زمان‌سنج ۰ تا ۱۰۰ (با زمان ۰ تا ۶۰، مسافت و **عدم‌قطعیت اعلام‌شده**) و دینوی مجازی (توان و گشتاور **تخمینی** از یک کشش با دریچه گاز کامل). هر دو کاملاً غیرفعال‌اند و فقط داده poll موجود را می‌خوانند؛ «poll سریع» هنگام اندازه‌گیری فقط دور، سرعت و دریچه گاز را می‌خواند (دستور کمتر، نه بیشتر) | `src/iran_obd_tuner/diagnostics/performance.py`, `diagnostics/dyno.py`, `ui/performance_view.py` |
+| **لایه CAN و ISO-TP (ISO 15765-2) خودِ پروژه** روی python-can (اختیاری، `[can]`): رابط‌های `slcan`، `pcan`، `gs_usb`، `kvaser`، `socketcan` و باس مجازی؛ Single/First/Consecutive Frame، Flow Control (BS، STmin، Wait)، padding، timeoutهای N_Bs/N_Cr. نام رابط همیشه صریح است — **روی رابط CAN واقعی اعتبارسنجی نشده** | `src/iran_obd_tuner/hardware/can_bus.py`, `isotp.py` |
+| **کلاینت UDS (ISO 14229-1) فقط‌خواندنی:** `0x10` فقط ۰۱/۰۳، `0x3E`، `0x22` و `0x19` (۰۱/۰۲)، با فهرست سفید سخت‌کد که سرویس‌های نوشتن/امنیت/برنامه‌ریزی (`0x11`، `0x14`، `0x27`، `0x2E`، `0x2F`، `0x31`، `0x34` تا `0x37` و چند سرویس دیگر) و جلسه برنامه‌ریزی `0x02` را همیشه رد می‌کند؛ مدیریت NRC (`0x78` با سقف، `0x21`، `0x31`، `0x33`، `0x22`) | `src/iran_obd_tuner/hardware/uds.py` |
+| شناسایی ECU با UDS: DIDهای استاندارد `F190` (VIN)، `F187`، `F189`، `F191`، `F197` و کدهای خطای UDS، هر کدام با وضعیت مستقل؛ جلسه Extended فقط با انتخاب صریح کاربر و همیشه با بازگشت به `0x10 0x01`؛ جستجوی ECU با `3E 00` روی `0x7DF` فقط با کلیک کاربر | `src/iran_obd_tuner/diagnostics/ecu_identification.py`, `ui/uds_view.py` |
+| ECU شبیه‌سازی‌شده قطعی روی باس مجازی python-can (`virtual-sim`)، با برچسب «شبیه‌سازی» در CLI، JSON، رابط کاربری و ترافیک | `src/iran_obd_tuner/hardware/uds_sim.py`, `uds_link.py` |
 | گزارش JSON نسخه ۲ (`schema_version: 2`) با `monitor_status`، `dtc_categories` و `freeze_frame` | `src/iran_obd_tuner/diagnostics/models.py` |
 | خواندن داده در thread پس‌زمینه (رابط کاربری هنگام جستجوی پروتکل قفل نمی‌شود) | `src/iran_obd_tuner/ui/worker.py` |
 | دیتابیس دانش JSON (زیرمجموعه عمومی کدهای خطا) | `src/iran_obd_tuner/database/` |
@@ -73,6 +77,9 @@
   (`SIMULATEDVIN00001`) با برچسب «داده شبیه‌سازی‌شده» نمایش داده می‌شود.
 - توضیحات کدهای خطا از یک زیرمجموعه دستی‌نویس غیرمرجع (generic) می‌آید که متادیتای آن
   `authoritative: false` است.
+- ECU شبیه‌سازی‌شده UDS (`can_interface = "virtual-sim"`، پیش‌فرض) مقادیر آشکارا ساختگی برمی‌گرداند
+  (`SIMULATEDVIN00004`، `SIM-SW-1.0`، ...). هیچ نام ECU، شماره قطعه یا شناسه CAN واقعی خودروهای
+  ایرانی تقلید نشده است.
 
 ### برنامه‌ریزی‌شده (پیاده‌سازی نشده — بدون ادعای پشتیبانی)
 
@@ -82,7 +89,8 @@
 | تفکیک چند ECU با headerها، freeze frameهای غیر از ۰۰، PID `0141` | ۱ | — |
 | تأیید جدول بیت‌های PID `0101` با متن SAE J1979 | ۱ | دسترسی به استاندارد |
 | مقایسه زمان‌سنج و دینوی مجازی با GPS و دینامومتر واقعی | ۱ | سخت‌افزار و خودرو |
-| CAN و UDS (SocketCAN/PCAN/Kvaser) | ۲ | `[can]`، `[bench]` + سخت‌افزار |
+| اعتبارسنجی CAN/ISO-TP/UDS روی رابط و ECU واقعی؛ تأیید اینکه پژو پارس TU5 روی پایه‌های CAN سوکت OBD اصلاً UDS پاسخ می‌دهد | ۲ | رابط CAN + خودرو |
+| خواندن DIDهای غیراستاندارد و شناسه‌های CAN ویژه خودروهای ایرانی | ۳ | منبع مستند، نه حدس |
 | مطالعه و تکمیل دیتابیس دانش خودروهای ایرانی | ۳ | پژوهش مستند، نه حدس |
 | خواندن/ویرایش ROM در حالت Bench و تصحیح چک‌سام | ۴ | تأیید صریح + اعتبارسنجی خودرویی |
 | فلش Bench و مکانیزم بازگردانی | ۵ | کارفرمای تأییدشده و مسیر کنترل‌شده |
@@ -133,6 +141,14 @@ declared adapters: 3 (1 implemented)
   ارسال نشود. اگر دستگاه روی درگاه به `ATZ` به‌عنوان ELM327 پاسخ ندهد، هیچ فرمان دیگری ارسال نمی‌شود.
 - انتخاب «آداپتور واقعی» در داشبورد **هرگز** بی‌صدا به شبیه‌ساز تبدیل نمی‌شود؛ اگر اتصال شکست بخورد،
   خطا نمایش داده می‌شود.
+- **UDS روی CAN:** هر درخواست از یک نقطه واحد (`hardware/uds.check_request_allowed`) با فهرست سفید
+  پیش‌فرض‌-رد عبور می‌کند. سرویس‌های `0x11` ECUReset، `0x14` ClearDiagnosticInformation، `0x27`
+  SecurityAccess، `0x2E` WriteDataByIdentifier، `0x2F` IOControl، `0x31` RoutineControl، `0x34` تا
+  `0x37` (دانلود/آپلود/انتقال) و جلسه برنامه‌ریزی `0x02` و جلسه‌های سازنده **همیشه** رد می‌شوند. جلسه
+  Extended (`0x10 0x03`) پیش‌فرض خاموش است، در تنظیمات و متغیر محیطی **وجود ندارد**، فقط با چک‌باکس
+  رابط کاربری یا `--extended-session` برای همان اجرا فعال می‌شود و ECU همیشه به `0x10 0x01` برمی‌گردد.
+  تست‌های AST وجود نداشتن درخواست نوشتنی را در کد بررسی می‌کنند. هنگام کار با رابط واقعی: سوئیچ باز،
+  موتور خاموش، خودرو متوقف.
 - پیش‌نیازهای هر نوشتن آینده در `tuning/interfaces.py` (`BenchSafetyChecklist`) فهرست شده‌اند.
 
 ## پیش‌نیازها
@@ -192,6 +208,9 @@ iran-obd-tuner diagnose     # یک جلسه تشخیص فقط‌خواندنی �
 iran-obd-tuner diagnose --json --output output/report.json
 iran-obd-tuner diagnose --pids 010C,010D,0105 --adapter mock
 iran-obd-tuner diagnose --adapter elm327 --port COM3   # آداپتور واقعی، فقط‌خواندنی
+iran-obd-tuner uds-ident --discover                    # شناسایی UDS با ECU شبیه‌سازی‌شده (نیازمند [can])
+iran-obd-tuner uds-ident --json --output output/ecu.json
+iran-obd-tuner uds-ident --interface slcan --channel COM5 --bitrate 500000   # رابط واقعی، فقط‌خواندنی
 
 # داشبورد گرافیکی (نیازمند extras به نام gui)
 iran-obd-tuner-gui
@@ -225,8 +244,9 @@ python scripts/check.py          # هر سه گیت بالا با هم (همان
 نباشد، خودکار skip می‌شوند. برای اجرای آن‌ها روی ماشین خودتان `pip install -e ".[dev,gui]"`
 لازم است.
 
-CI (`.github/workflows/ci.yml`) روی پایتون ۳٫۱۱، ۳٫۱۲ و ۳٫۱۳ همین سه گیت را اجرا می‌کند.
-extras سخت‌افزاری/گرافیکی عمداً در CI نصب نمی‌شوند (نیاز به سخت‌افزار واقعی و تست دستی دارند).
+CI (`.github/workflows/ci.yml`) روی پایتون ۳٫۱۱، ۳٫۱۲ و ۳٫۱۳ همین سه گیت را با extra `[can]`
+اجرا می‌کند تا تست‌های ISO-TP/UDS روی باس مجازی python-can (بدون هیچ رابط فیزیکی) اجرا شوند. یک
+job دیگر بدون extras اجرا می‌شود تا نبودِ وابستگی‌های اختیاری هم تست شود. `[gui]` در CI نصب نمی‌شود.
 
 ## ساختار پروژه
 
@@ -235,11 +255,14 @@ iran-obd-tuner/
 ├─ src/iran_obd_tuner/               کد برنامه (بسته واقعی، src-layout)
 │  ├─ app/                           ورودی‌ها و سیم‌کشی: cli.py، gui_main.py، application.py، dashboard.py
 │  ├─ core/                          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC، مرز ایمنی
-│  ├─ hardware/                      قرارداد آداپتور (base.py)، شبیه‌ساز (mock.py)، رجیستری، فهرست درگاه‌ها
-│  ├─ diagnostics/                   گزارش یک‌باره (service.py)، نشست داده زنده (live_data.py)، ضبط CSV (recorder.py)
+│  ├─ hardware/                      قرارداد آداپتور (base.py)، شبیه‌ساز (mock.py)، ELM327، رجیستری، فهرست درگاه‌ها،
+│  │                                 CAN (can_bus.py)، ISO-TP (isotp.py)، UDS (uds.py، uds_link.py، uds_sim.py)
+│  ├─ diagnostics/                   گزارش یک‌باره (service.py)، نشست داده زنده (live_data.py)، ضبط CSV (recorder.py)،
+│  │                                 شناسایی ECU با UDS (ecu_identification.py)
 │  ├─ database/                      دیتابیس دانش (JSON) + داده‌های همراه بسته
 │  ├─ tuning/                        رابط‌های Bench و پیش‌نیازهای نوشتن (بدون پیاده‌سازی)
-│  └─ ui/                            داشبورد PySide6: backend.py، gauges.py، i18n.py، icon.py، safety_modal.py، main_window.py
+│  └─ ui/                            داشبورد PySide6: backend.py، gauges.py، i18n.py، icon.py، safety_modal.py، main_window.py،
+│                                    diagnostics_view.py، performance_view.py، traffic_view.py، uds_view.py
 ├─ tests/                            unit/ ، integration/ (CLI + GUI)، fixtures/
 ├─ config/example.toml               نمونه پیکربندی (کپی به config/local.toml)
 ├─ docs/                             idea-report.md، architecture.md، development.md
@@ -276,7 +299,8 @@ iran-obd-tuner/
   انجام شده است: داشبورد و CLI حالا یک مسیر داده واحد (`ObdAdapter`) دارند، داده ساختگی و
   مسیر پاک کردن کدها حذف شده و داده شبیه‌سازی همه‌جا برچسب دارد. Milestone 2 هم انجام شده است:
   آداپتور ELM327 فقط‌خواندنی و خواندن در پس‌زمینه. اعتبارسنجی روی آداپتور و خودروی واقعی باقی مانده است.
-- **فاز ۲:** CAN و UDS، شناسایی VIN و خانواده ECU
+- **فاز ۲ (پایه انجام‌شده):** Milestone 4: لایه CAN، ISO-TP و کلاینت UDS فقط‌خواندنی، شناسایی ECU
+  و VIN با DID `F190`، ECU شبیه‌سازی‌شده روی باس مجازی. اعتبارسنجی روی رابط CAN و خودروی واقعی باقی مانده است.
 - **فاز ۳:** دیتابیس دانش خودروهای ایرانی بر پایه شواهد مستند
 - **فاز ۴:** خواندن و ویرایش ROM در Bench + تصحیح چک‌سام (نیازمند تأیید)
 - **فاز ۵:** فلش Bench با پشتیبان‌گیری اجباری و بازگردانی (نیازمند تأیید)

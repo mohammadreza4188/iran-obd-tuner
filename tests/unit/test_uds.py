@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from iran_obd_tuner.core.exceptions import AdapterTimeoutError, SafetyGuardError
-from iran_obd_tuner.hardware.can_bus import CanFrame
 from iran_obd_tuner.hardware.isotp import IsoTpChannel, IsoTpConfig
 from iran_obd_tuner.hardware.uds import (
     ALLOWED_REQUESTS,
@@ -26,53 +25,6 @@ from iran_obd_tuner.hardware.uds import (
 from iran_obd_tuner.hardware.uds_sim import SimulatedEcuConfig, SimulatedUdsEcu
 
 TX, RX = 0x7E0, 0x7E8
-
-
-class SimResponder:
-    """Plays the ECU side of ISO-TP for the fake bus (single-threaded)."""
-
-    def __init__(self, ecu) -> None:
-        self.ecu = ecu
-        self.pending_cfs: list[CanFrame] = []
-
-    def _pad(self, data: bytes) -> CanFrame:
-        return CanFrame(RX, data + b"\xcc" * (8 - len(data)))
-
-    def _encode(self, response: bytes) -> list[CanFrame]:
-        if len(response) <= 7:
-            return [self._pad(bytes([len(response)]) + response)]
-        n = len(response)
-        frames = [self._pad(bytes([0x10 | (n >> 8), n & 0xFF]) + response[:6])]
-        rest, seq = response[6:], 1
-        while rest:
-            self.pending_cfs.append(self._pad(bytes([0x20 | seq]) + rest[:7]))
-            rest, seq = rest[7:], (seq + 1) & 0x0F
-        return frames
-
-    def __call__(self, frame: CanFrame) -> list[CanFrame]:
-        pci = frame.data[0] >> 4
-        if pci == 3:
-            out, self.pending_cfs = self.pending_cfs, []
-            return out
-        if pci != 0:
-            return []
-        request = frame.data[1 : 1 + (frame.data[0] & 0x0F)]
-        frames: list[CanFrame] = []
-        for response in self.ecu.handle(request):
-            frames.extend(self._encode(response))
-        return frames
-
-
-@pytest.fixture
-def make_client(fake_can_bus):
-    def build(ecu=None, **kwargs):
-        ecu = ecu or SimulatedUdsEcu()
-        bus = fake_can_bus(SimResponder(ecu))
-        channel = IsoTpChannel(bus, IsoTpConfig(TX, RX), clock=bus.clock, sleep=bus.sleep)
-        client = UdsClient(channel, clock=bus.clock, sleep=bus.sleep, **kwargs)
-        return client, ecu, bus
-
-    return build
 
 
 # --------------------------------------------------------------------------- allowlist
@@ -107,8 +59,8 @@ def test_required_forbidden_services_are_listed() -> None:
 
 
 @pytest.mark.parametrize("session", [0x02, 0x04, 0x40, 0x60, 0x7E])
-def test_programming_and_vendor_sessions_are_refused(make_client, session: int) -> None:
-    client, ecu, bus = make_client(allow_extended_session=True)
+def test_programming_and_vendor_sessions_are_refused(make_uds_client, session: int) -> None:
+    client, ecu, bus = make_uds_client(allow_extended_session=True)
     with pytest.raises(SafetyGuardError):
         client.diagnostic_session_control(session)
     assert bus.sent == []  # nothing reached the bus
@@ -123,15 +75,15 @@ def test_malformed_requests_are_refused() -> None:
 # --------------------------------------------------------------------------- services
 
 
-def test_read_vin_through_response_pending_and_segmentation(make_client) -> None:
-    client, ecu, _bus = make_client()
+def test_read_vin_through_response_pending_and_segmentation(make_uds_client) -> None:
+    client, ecu, _bus = make_uds_client()
 
     assert client.read_data_by_identifier(0xF190) == b"SIMULATEDVIN00004"
     assert ecu.requests == [b"\x22\xf1\x90"]
 
 
-def test_negative_responses_are_typed(make_client) -> None:
-    client, _ecu, _bus = make_client(
+def test_negative_responses_are_typed(make_uds_client) -> None:
+    client, _ecu, _bus = make_uds_client(
         SimulatedUdsEcu(SimulatedEcuConfig(conditions_not_correct_dids=frozenset({0xF189})))
     )
 
@@ -147,15 +99,15 @@ def test_negative_responses_are_typed(make_client) -> None:
     assert conditions.value.nrc == 0x22 and "conditionsNotCorrect" in str(conditions.value)
 
 
-def test_response_pending_has_a_ceiling(make_client) -> None:
+def test_response_pending_has_a_ceiling(make_uds_client) -> None:
     ecu = SimulatedUdsEcu(SimulatedEcuConfig(pending_dids={0xF190: 50}))
-    client, _ecu, _bus = make_client(ecu, timing=UdsTiming(max_pending=10))
+    client, _ecu, _bus = make_uds_client(ecu, timing=UdsTiming(max_pending=10))
 
     with pytest.raises(AdapterTimeoutError, match="responsePending"):
         client.read_data_by_identifier(0xF190)
 
 
-def test_busy_repeat_request_is_retried_twice(make_client) -> None:
+def test_busy_repeat_request_is_retried_twice(make_uds_client) -> None:
     class BusyEcu(SimulatedUdsEcu):
         busy = 2
 
@@ -166,7 +118,7 @@ def test_busy_repeat_request_is_retried_twice(make_client) -> None:
                 return [b"\x7f\x22\x21"]
             return super().handle(request)
 
-    client, ecu, _bus = make_client(BusyEcu())
+    client, ecu, _bus = make_uds_client(BusyEcu())
 
     assert client.read_data_by_identifier(0xF189) == b"SIM-SW-1.0"
     assert ecu.requests.count(b"\x22\xf1\x89") == 3
@@ -181,13 +133,13 @@ def test_no_answer_is_a_timeout(fake_can_bus) -> None:
         client.read_data_by_identifier(0xF190)
 
 
-def test_extended_session_is_opt_in_and_always_left(make_client) -> None:
-    locked, _ecu, bus = make_client()
+def test_extended_session_is_opt_in_and_always_left(make_uds_client) -> None:
+    locked, _ecu, bus = make_uds_client()
     with pytest.raises(SafetyGuardError, match="not enabled"), locked.extended_session():
         pass
     assert bus.sent == []
 
-    client, ecu, _bus = make_client(allow_extended_session=True)
+    client, ecu, _bus = make_uds_client(allow_extended_session=True)
     with pytest.raises(UdsNotSupportedError):
         client.read_data_by_identifier(0xF197)  # extended-only DID
     with pytest.raises(RuntimeError), client.extended_session():
@@ -198,8 +150,8 @@ def test_extended_session_is_opt_in_and_always_left(make_client) -> None:
     assert ecu.requests[-1] == b"\x10\x01"
 
 
-def test_tester_present_keeps_the_extended_session_alive(make_client, fake_clock) -> None:
-    client, ecu, _bus = make_client(allow_extended_session=True)
+def test_tester_present_keeps_the_extended_session_alive(make_uds_client, fake_clock) -> None:
+    client, ecu, _bus = make_uds_client(allow_extended_session=True)
     with client.extended_session():
         fake_clock.advance(3.0)  # longer than keepalive_s
         client.read_data_by_identifier(0xF197)
@@ -207,16 +159,16 @@ def test_tester_present_keeps_the_extended_session_alive(make_client, fake_clock
     assert b"\x3e\x80" in ecu.requests
 
 
-def test_tester_present_with_and_without_suppression(make_client) -> None:
-    client, ecu, _bus = make_client()
+def test_tester_present_with_and_without_suppression(make_uds_client) -> None:
+    client, ecu, _bus = make_uds_client()
     client.tester_present(suppress_response=True)
     client.tester_present(suppress_response=False)
 
     assert ecu.requests == [b"\x3e\x80", b"\x3e\x00"]
 
 
-def test_dtc_count_format_and_records(make_client) -> None:
-    client, _ecu, _bus = make_client()
+def test_dtc_count_format_and_records(make_uds_client) -> None:
+    client, _ecu, _bus = make_uds_client()
 
     availability, dtc_format, count = client.read_dtc_count(0xFF)
     mask, records = client.read_dtcs_by_status_mask(0xFF)
@@ -230,8 +182,8 @@ def test_dtc_count_format_and_records(make_client) -> None:
     assert second.pending and not second.confirmed
 
 
-def test_status_mask_filters_dtcs(make_client) -> None:
-    client, _ecu, _bus = make_client()
+def test_status_mask_filters_dtcs(make_uds_client) -> None:
+    client, _ecu, _bus = make_uds_client()
     _mask, records = client.read_dtcs_by_status_mask(0x08)  # confirmed only
 
     assert [raw.hex() for raw, _ in records] == ["030100"]

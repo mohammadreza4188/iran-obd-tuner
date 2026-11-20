@@ -48,8 +48,10 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
   پیاده می‌کند.
 - این قواعد فقط روی کاغذ نیستند: `tests/unit/test_architecture.py` importهای همه ماژول‌ها را با
   AST بررسی می‌کند. چند چیز دیگر را هم ممنوع می‌کند: import کتابخانه خارجی در سطح ماژول (به جز
-  PySide6 در `ui` و ورودی GUI)، import تنبل (داخل تابع) بیرون از `hardware`، و هر ارجاع به
-  دستور `CLEAR_DTC`.
+  PySide6 در `ui` و ورودی GUI)، import تنبل (داخل تابع) بیرون از `hardware`، هر ارجاع به
+  دستور `CLEAR_DTC`، و (Milestone 4) import `can`/`isotp`/`udsoncan` بیرون از توابع `hardware`،
+  literal درخواست UDS با SID نوشتنی، فراخوانی `can.Bus` بدون `interface=` و ساخت سرور ECU
+  شبیه‌سازی بیرون از `hardware/uds_link.py`.
 
 جدول کامل کاتالوگ مسیرها:
 
@@ -69,6 +71,13 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `hardware/transport.py` | قرارداد `Transport` + `PySerialTransport` (pyserial تنبل) | پیاده‌شده |
 | `hardware/elm327_protocol.py` | تجزیه خالص پاسخ‌های ELM327 + فهرست سفید دستورها | پیاده‌شده (تست با نمونه‌های datasheet) |
 | `hardware/elm327.py` | `Elm327Adapter` فقط‌خواندنی | پیاده‌شده، **روی سخت‌افزار اعتبارسنجی نشده** |
+| `hardware/can_bus.py` | `CanFrame`، قرارداد `CanBus`، `PythonCanBus` (python-can تنبل، نام رابط همیشه صریح) | پیاده‌شده، **روی رابط واقعی اعتبارسنجی نشده** |
+| `hardware/isotp.py` | ISO-TP خودِ پروژه: `IsoTpChannel` (SF/FF/CF/FC، BS، STmin، Wait)، `functional_request` | پیاده‌شده |
+| `hardware/uds.py` | `UdsClient` فقط‌خواندنی، فهرست سفید `check_request_allowed`، NRCها، decode DTC، `discover_ecus` | پیاده‌شده |
+| `hardware/uds_sim.py` | `SimulatedUdsEcu` قطعی + `VirtualBusEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
+| `hardware/uds_link.py` | `UdsLink`/`UdsLinkConfig`: رابط CAN ← ISO-TP ← `UdsClient`؛ `virtual-sim` = باس مجازی + ECU شبیه‌سازی | پیاده‌شده |
+| `diagnostics/ecu_identification.py` | `read_ecu_identification` (DID و DTC مستقل، fallback جلسه Extended با opt-in)، `EcuIdentification`، `UdsIdentificationSession` | پیاده‌شده |
+| `ui/uds_view.py` | بخش «شناسایی ECU با UDS» در تب شناسایی | پیاده‌شده |
 | `ui/worker.py` | `BackgroundRunner`: یک thread پس‌زمینه، اجرای ترتیبی کارهای آداپتور | پیاده‌شده |
 | `core/monitors.py` | decode PID `0101`: MIL، تعداد DTC، نوع احتراق، آمادگی مانیتورها | پیاده‌شده (جدول بیت‌ها با J1979 اصلی تأیید نشده) |
 | `core/dtc.py` → `DtcStatus` | دسته کد خطا: stored (۰۳) / pending (۰۷) / permanent (۰A) | پیاده‌شده |
@@ -183,6 +192,16 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
   سرویس ۰۴ در کد وجود ندارد.** کد python-OBD قبلی (`ObdService.clear_dtc`) در Milestone 1 با
   تأیید صاحب پروژه حذف شد. `tests/unit/test_architecture.py` شکست می‌خورد اگر `CLEAR_DTC`
   دوباره ظاهر شود یا کلاسی این متد را override کند.
+- **UDS روی CAN (Milestone 4):** `hardware/uds.check_request_allowed` تنها دروازه بین کلاینت و باس
+  است و پیش‌فرض‌-رد است: فقط `0x10` با ۰۱/۰۳ (و نسخه suppress آن‌ها)، `0x3E` ۰۰/۸۰، `0x22` با
+  دقیقاً یک DID و `0x19` ۰۱/۰۲ مجازند. `FORBIDDEN_SERVICES` سرویس‌های نوشتن/امنیت/ریست/برنامه‌ریزی را
+  با نام رد می‌کند. جلسه Extended فقط با پارامتر کدی `allow_extended_session=True` (چک‌باکس رابط کاربری
+  یا `--extended-session` در CLI) ممکن است، در تنظیمات وجود ندارد و `extended_session()` همیشه در
+  `finally` به `0x10 0x01` برمی‌گردد. جستجوی تابعی (`3E 00` روی `0x7DF`) هم از همین دروازه عبور
+  می‌کند. ECU شبیه‌سازی‌شده هم هر سرویس دیگری را با `serviceNotSupported` جواب می‌دهد. تست‌های
+  `test_uds.py` (همه ۶۵۵۳۶ ترکیب SID/زیرتابع) و `test_architecture.py` (نبود literal درخواست با SID
+  نوشتنی، نبود نام این سرویس‌ها بیرون از `uds.py`، صریح بودن `interface=` در `can.Bus`، import
+  تنبل `can`/`isotp`/`udsoncan` فقط در `hardware`) این را قفل می‌کنند.
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -263,6 +282,13 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۲۴ | (Milestone 3) شتاب دینو از مشتق دور موتور در یک دنده، نه از سرعت | سرعت دقت ۱ km/h دارد و مشتقش نویز است؛ rpm دقت ۰٫۲۵ دارد. `k` با کمترین مربعات از زوج‌های (rpm، سرعت) | مشتق مستقیم سرعت |
 | ۲۵ | (Milestone 3) هر `PidReading` زمان monotonic خودش را دارد (`sampled_at_s`) | پارامترهای یک poll در زمان‌های متفاوت خوانده می‌شوند | زمان کلی snapshot |
 | ۲۶ | (Milestone 3) وزن خالی خودرو برای دینو پیش‌فرض ندارد؛ بقیه پارامترها پیش‌فرض عمومی با برچسب | وزن هیچ خودرویی را از خودمان نمی‌سازیم | پیش‌فرض برای پژو پارس |
+| ۲۷ | (Milestone 4) ISO-TP خودِ پروژه به‌جای `can-isotp` | منطق کوچک و کاملاً قابل‌تست با باس جعلی و ساعت تزریقی؛ بدون thread پس‌زمینه کتابخانه؛ ترافیک فریم‌به‌فریم ثبت می‌شود؛ یک وابستگی کمتر | `can-isotp` (رفتار thread و timeout آن کمتر قابل‌کنترل است) |
+| ۲۸ | (Milestone 4) کلاینت UDS فقط‌خواندنی خودِ پروژه؛ `udsoncan` در `[bench]` دست‌نخورده | `udsoncan` همه سرویس‌های نوشتنی را دارد؛ فهرست سفید یک‌جا و قابل AST-تست ساده‌تر از محدود کردن یک کتابخانه کامل است | `udsoncan` پشت wrapper |
+| ۲۹ | (Milestone 4) فهرست سفید پیش‌فرض‌-رد + فهرست نام‌دار سرویس‌های ممنوع، فقط در `hardware/uds.py` | دفاع چندلایه مانند ADR ۱۷؛ حتی باگ در لایه بالاتر نمی‌تواند `0x27`/`0x2E`/`0x34` بفرستد | فقط گارد `core.safety` |
+| ۳۰ | (Milestone 4) جلسه Extended: opt-in کدی برای هر اجرا، نه تنظیمات؛ همیشه بازگشت به default | بعضی DIDها فقط در `0x03` خوانده می‌شوند، ولی تغییر جلسه نباید با یک فایل یا متغیر محیطی دائمی شود | کلید `allow_extended_session` در TOML |
+| ۳۱ | (Milestone 4) `virtual-sim` = باس `virtual` python-can + سرور ECU شبیه‌سازی؛ رابط واقعی بدون کانال خطا می‌دهد و هرگز به شبیه‌ساز برنمی‌گردد | داده شبیه‌سازی از منبع (لینک) برچسب می‌خورد، نه از مقدار | حدس شبیه‌سازی از مقدار VIN |
+| ۳۲ | (Milestone 4) خروجی `uds-ident` یک سند JSON جدا (`kind: uds_ecu_identification`، `schema_version: 1`)؛ `DiagnosticReport` نسخه ۲ دست‌نخورده | گزارش OBD و شناسایی UDS دو جریان مستقل‌اند | افزودن بخش UDS به گزارش و افزایش نسخه |
+| ۳۳ | (Milestone 4) `VehicleInfo.vin_source` (`obd_09` / `uds_f190`) | منبع VIN باید قابل ردیابی باشد. این فیلد به `vehicle` در گزارش نسخه ۲ **اضافه** شده است (افزودنی؛ کلید قبلی حذف یا تغییر نکرده)، پس نسخه افزایش نیافت | نسخه ۳ برای یک کلید اختیاری |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
@@ -300,6 +326,18 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
     سرعت واقعی) و دقتش به نرخ نمونه وابسته است؛ عدم‌قطعیت همراه نتیجه گزارش می‌شود.
 13. پارامترهای دینو از `dyno_*` در `config/local.toml` خوانده می‌شوند و تغییرشان در UI فقط
     برای همان جلسه است (برنامه فایل تنظیمات را بازنویسی نمی‌کند).
+14. **CAN/ISO-TP/UDS روی رابط و ECU واقعی اعتبارسنجی نشده است.** همه تست‌ها روی باس جعلی یا باس
+    مجازی python-can با ECU شبیه‌سازی اجرا می‌شوند. timeoutها (`p2_s = 1 s`، `p2_star_s = 5 s`،
+    `N_Bs/N_Cr = 1 s`) برآورد محافظه‌کارانه‌اند.
+15. **پژو پارس TU5:** معلوم نیست ECU این خودرو روی پایه‌های CAN سوکت OBD (۶ و ۱۴) UDS پاسخ دهد؛
+    ممکن است فقط K-Line (ISO 14230/KWP2000) داشته باشد. شناسه‌های پیش‌فرض `0x7E0/0x7E8` از
+    ISO 15765-4 هستند و **برای هیچ خودروی ایرانی تأیید نشده‌اند**؛ از «جستجوی ECU» استفاده کنید.
+16. فقط آدرس‌دهی ۱۱ بیتی و فریم کلاسیک ۸ بایتی پیاده شده است (نه ۲۹ بیتی، نه CAN FD، نه آدرس‌دهی
+    extended/mixed ISO-TP). جستجوی تابعی فقط پاسخ‌های Single Frame را جمع می‌کند.
+17. decode DTC در UDS فقط برای DTCFormatIdentifier `0x00`/`0x04` (SAE J2012-DA) انجام می‌شود؛
+    قالب‌های دیگر به‌صورت هگز خام نمایش داده می‌شوند. توضیح کدهای UDS از دیتابیس دانش خوانده نمی‌شود.
+18. هر عملیات UDS در داشبورد لینک را باز و بسته می‌کند (one-shot)؛ برای رابط‌های سریال مثل `slcan`
+    این یعنی باز شدن مجدد درگاه در هر کلیک. نگه داشتن لینک و TesterPresent دوره‌ای پیاده نشده است.
 
 ### تصمیم‌هایی که نیازمند تأیید تیم است
 

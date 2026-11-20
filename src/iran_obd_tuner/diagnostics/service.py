@@ -92,6 +92,7 @@ def vehicle_info_for(adapter: ObdAdapter, vin: str | None) -> VehicleInfo:
         protocol=adapter.active_protocol,
         adapter_name=info.name,
         simulated=info.simulated,
+        vin_source="obd_09" if vin is not None else None,
     )
 
 

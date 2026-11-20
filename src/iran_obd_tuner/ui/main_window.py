@@ -17,7 +17,11 @@ Honesty rules visible here:
 Every adapter call (connect, poll, trouble codes, identification) runs on one background
 thread (:class:`~iran_obd_tuner.ui.worker.BackgroundRunner`), so a slow serial adapter
 never freezes the window; results are applied on the GUI thread, and results that arrive
-after a disconnect are dropped. Not implemented: freeze frames, reports.
+after a disconnect are dropped.
+
+The Identification tab also hosts :class:`~iran_obd_tuner.ui.uds_view.UdsView`: UDS over
+CAN, independent of the OBD connection. Each click asks the backend for a one-shot
+``UdsIdentificationSession`` and runs it on the same background thread.
 """
 
 from __future__ import annotations
@@ -57,6 +61,7 @@ from iran_obd_tuner.core.exceptions import (
 )
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import VehicleInfo
+from iran_obd_tuner.diagnostics.ecu_identification import EcuIdentification
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot, PidStatus
 from iran_obd_tuner.diagnostics.models import (
     DtcCategoryResult,
@@ -72,6 +77,7 @@ from iran_obd_tuner.ui.icon import build_icon
 from iran_obd_tuner.ui.performance_view import FAST_POLL_PIDS, PerformanceView
 from iran_obd_tuner.ui.safety_modal import SafetyModal
 from iran_obd_tuner.ui.traffic_view import TrafficView
+from iran_obd_tuner.ui.uds_view import UdsView
 from iran_obd_tuner.ui.worker import BackgroundRunner
 
 __all__ = ["DASHBOARD_PIDS", "GAUGES", "GaugeSpec", "MainWindow"]
@@ -445,6 +451,9 @@ class MainWindow(QMainWindow):
         # Identification
         ident_page = QWidget()
         ident_layout = QVBoxLayout(ident_page)
+        self.ident_obd_title = QLabel()
+        self.ident_obd_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        ident_layout.addWidget(self.ident_obd_title)
         self.ident_btn = QPushButton()
         self.ident_btn.setMinimumHeight(40)
         self.ident_btn.setMaximumWidth(340)
@@ -455,10 +464,20 @@ class MainWindow(QMainWindow):
         self.ident_result_label.setTextFormat(Qt.RichText)
         self.ident_result_label.setVisible(False)
         ident_layout.addWidget(self.ident_btn, alignment=Qt.AlignCenter)
-        ident_layout.addSpacing(20)
+        ident_layout.addSpacing(12)
         ident_layout.addWidget(self.ident_result_label)
+        ident_layout.addSpacing(12)
+        # UDS over CAN: independent of the OBD connection above (its own one-shot link).
+        self.uds_view = UdsView(self._backend.can_defaults)
+        self.uds_view.discover_requested.connect(self._discover_ecus)
+        self.uds_view.read_requested.connect(self._read_uds_identification)
+        ident_layout.addWidget(self.uds_view)
         ident_layout.addStretch()
-        self.stack.addWidget(ident_page)
+        ident_scroll = QScrollArea()
+        ident_scroll.setWidgetResizable(True)
+        ident_scroll.setFrameShape(QFrame.NoFrame)
+        ident_scroll.setWidget(ident_page)
+        self.stack.addWidget(ident_scroll)
 
         # Bench (not implemented: disabled placeholders that say so)
         bench_page = QWidget()
@@ -575,6 +594,8 @@ class MainWindow(QMainWindow):
         self.log_tabs.setTabText(0, t["log_tab_events"])
         self.log_tabs.setTabText(1, t["log_tab_traffic"])
         self.ident_btn.setText(t["ident_btn"])
+        self.ident_obd_title.setText(t["ident_obd_title"])
+        self.uds_view.set_language(self.lang)
         self.bench_title.setText(t["bench_title"])
         self.bench_warning.setText(t["bench_warning"])
         self.bench_btn_read.setText(t["bench_btn_read"])
@@ -961,6 +982,49 @@ class MainWindow(QMainWindow):
             )
         self.ident_result_label.setText(text)
         self.ident_result_label.setVisible(True)
+
+    # ------------------------------------------------------------ UDS identification
+    def _start_uds_job(self, job_name: str) -> None:
+        """Build a one-shot UDS session from the panel's choices and run ``job_name``."""
+        interface, channel, bitrate, extended = self.uds_view.selection()
+        try:
+            session = self._backend.create_uds_session(
+                interface=interface,
+                channel=channel,
+                bitrate=bitrate,
+                allow_extended_session=extended,
+            )
+        except IranObdTunerError as exc:
+            self._on_uds_failed(exc)
+            return
+        self.uds_view.set_busy(True)
+        if job_name == "discover":
+            self._runner.submit(session.discover, self._on_ecus_discovered, self._on_uds_failed)
+        else:
+            self._runner.submit(session.identify, self._on_uds_identified, self._on_uds_failed)
+
+    def _discover_ecus(self) -> None:
+        self._start_uds_job("discover")
+
+    def _read_uds_identification(self) -> None:
+        self._start_uds_job("identify")
+
+    def _on_ecus_discovered(self, response_ids: tuple[int, ...]) -> None:
+        self.uds_view.set_busy(False)
+        self.uds_view.show_discovery(response_ids)
+        self._append_log(
+            "msg.uds_discovered", ", ".join(f"{rid:03X}" for rid in response_ids) or "-"
+        )
+
+    def _on_uds_identified(self, result: EcuIdentification) -> None:
+        self.uds_view.set_busy(False)
+        self.uds_view.show_result(result)
+        self._append_log("msg.uds_read", result.interface, result.vin or "-")
+
+    def _on_uds_failed(self, error: BaseException) -> None:
+        self.uds_view.set_busy(False)
+        self.uds_view.show_error(_describe(error))
+        self._append_log("msg.uds_error", _describe(error))
 
     # ------------------------------------------------------------ recording
     def _toggle_recording(self) -> None:

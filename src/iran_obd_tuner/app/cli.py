@@ -8,6 +8,10 @@ Commands:
 * ``diagnose`` — run one read-only diagnostic session and print or save the report
   (uses the simulated adapter by default; no vehicle is required). A real adapter is used
   with ``--adapter elm327 --port COM3``.
+* ``uds-ident`` — read-only UDS ECU identification over CAN (DIDs via ``0x22``, DTCs via
+  ``0x19``). ``--interface virtual-sim`` (default) talks to the simulated ECU on python-can's
+  virtual bus; real interfaces (``slcan``, ``pcan``, ...) need the ``[can]`` extra and
+  ``--channel``. Its JSON is a separate document, not a diagnostic report.
 
 Output is ASCII English so that it stays readable in any terminal, in logs and in CI.
 Persian language output belongs to the future UI layer, not to the CLI.
@@ -27,8 +31,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from iran_obd_tuner import __title__, __version__
-from iran_obd_tuner.app.application import Application
-from iran_obd_tuner.core.config import AppSettings, load_settings
+from iran_obd_tuner.app.application import Application, uds_link_config
+from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings, load_settings
 from iran_obd_tuner.core.exceptions import (
     AdapterNotFoundError,
     ConfigurationError,
@@ -36,6 +40,10 @@ from iran_obd_tuner.core.exceptions import (
 )
 from iran_obd_tuner.core.logging import configure_logging, get_logger, normalize_log_level
 from iran_obd_tuner.core.pids import is_valid_pid, normalize_pid
+from iran_obd_tuner.diagnostics.ecu_identification import (
+    EcuIdentification,
+    UdsIdentificationSession,
+)
 from iran_obd_tuner.diagnostics.models import DiagnosticReport, ReadOutcome, TroubleCode
 from iran_obd_tuner.hardware.registry import declared_adapters, implemented_adapters
 
@@ -115,6 +123,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-vin",
         action="store_true",
         help="skip the vehicle identification request",
+    )
+
+    uds = subparsers.add_parser(
+        "uds-ident",
+        help="read-only UDS ECU identification over CAN (simulated ECU by default)",
+    )
+    uds.add_argument(
+        "--interface",
+        choices=CAN_INTERFACE_CHOICES,
+        default=None,
+        help="CAN interface, overriding 'can_interface' (virtual-sim = simulated ECU)",
+    )
+    uds.add_argument(
+        "--channel",
+        default=None,
+        metavar="NAME",
+        help="interface channel, e.g. COM5 (slcan), PCAN_USBBUS1 (pcan), can0 (socketcan)",
+    )
+    uds.add_argument("--bitrate", type=int, default=None, metavar="BPS", help="CAN bitrate")
+    uds.add_argument(
+        "--discover",
+        action="store_true",
+        help="first send one functional TesterPresent (0x7DF 3E 00) and list who answers",
+    )
+    uds.add_argument(
+        "--extended-session",
+        action="store_true",
+        help="allow a read-only fallback into the extended session (0x10 0x03) for DIDs the "
+        "default session refuses; the ECU is always returned to 0x10 0x01",
+    )
+    uds.add_argument("--json", action="store_true", help="print the result as JSON")
+    uds.add_argument(
+        "--output", type=Path, default=None, metavar="PATH", help="also write the JSON here"
     )
     return parser
 
@@ -242,6 +283,79 @@ def _render_report(report: DiagnosticReport) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _render_identification(result: EcuIdentification) -> tuple[str, ...]:
+    origin = "SIMULATED ECU - not vehicle data" if result.simulated else "CAN bus"
+    lines = [
+        f"ECU identification ({origin}): {result.interface}:{result.channel or '-'} "
+        f"request {result.request_id:03X} / response {result.response_id:03X}",
+    ]
+    for reading in result.dids:
+        label = f"  {reading.did:04X} {reading.name:<22}"
+        if reading.outcome is ReadOutcome.OK:
+            assert reading.raw is not None
+            value = reading.text if reading.text is not None else reading.raw.hex(" ").upper()
+            session = " (extended session)" if reading.session == "extended" else ""
+            lines.append(f"{label} {value}{session}")
+        else:
+            lines.append(f"{label} NOT AVAILABLE - {reading.outcome}: {reading.detail}")
+    vin = result.vin
+    lines.append(f"vin (from DID F190): {vin or 'unknown'}")
+    if result.extended_session_detail:
+        lines.append(f"extended session refused: {result.extended_session_detail}")
+    elif result.extended_session_used:
+        lines.append("extended session: used for a fallback read, then returned to default")
+    if result.dtc_outcome is not ReadOutcome.OK:
+        lines.append(f"DTCs (0x19): NOT AVAILABLE - {result.dtc_outcome}: {result.dtc_detail}")
+    else:
+        lines.append(f"DTCs (0x19 0x02, format {result.dtc_format or 0:02X}): {len(result.dtcs)}")
+        for dtc in result.dtcs:
+            status = dtc.status
+            flags = ", ".join(
+                name
+                for name, on in (
+                    ("confirmed", status.confirmed),
+                    ("pending", status.pending),
+                    ("test failed", status.test_failed),
+                    ("warning lamp", status.warning_indicator),
+                )
+                if on
+            )
+            code = dtc.code or f"raw {dtc.raw.hex().upper()}"
+            lines.append(f"  {code}  status {status.raw:02X} ({flags or 'no flag set'})")
+    lines.append("mode: read-only")
+    return tuple(lines)
+
+
+def _cmd_uds_ident(args: argparse.Namespace, settings: AppSettings) -> int:
+    config = uds_link_config(
+        settings, interface=args.interface, channel=args.channel, bitrate=args.bitrate
+    )
+    if not config.simulated:
+        print(
+            "safety: read-only requests only. Ignition ON, engine OFF, vehicle stationary.",
+            file=sys.stderr,
+        )
+    session = UdsIdentificationSession(config, allow_extended_session=args.extended_session)
+    if args.discover:
+        found = session.discover()
+        listed = ", ".join(f"{rid:03X}" for rid in found) or "none"
+        print(f"functional TesterPresent answered by: {listed}")
+    result = session.identify()
+    payload = json.dumps(result.as_dict(), indent=2, ensure_ascii=False)
+    if args.json:
+        print(payload)
+    else:
+        for line in _render_identification(result):
+            print(line)
+    if args.output is not None:
+        path = Path(args.output)
+        if path.parent != Path():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload + "\n", encoding="utf-8")
+        print(f"identification written to {path}")
+    return EXIT_OK
+
+
 def _cmd_diagnose(args: argparse.Namespace, settings: AppSettings) -> int:
     pids: tuple[str, ...] | None = None
     if args.pids:
@@ -311,6 +425,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_config(settings)
         if args.command == "diagnose":
             return _cmd_diagnose(args, settings)
+        if args.command == "uds-ident":
+            return _cmd_uds_ident(args, settings)
     except (ConfigurationError, AdapterNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE

@@ -228,3 +228,17 @@ def test_can_libraries_stay_inside_hardware_functions() -> None:
         top = use.module.split(".")[0]
         if top in {"can", "isotp", "udsoncan"}:
             assert use.layer == "hardware" and not use.module_level, use
+
+
+def test_the_simulated_ecu_server_is_only_started_by_the_virtual_sim_link() -> None:
+    """Only ``hardware/uds_link.py`` (for ``virtual-sim``) may create the simulator server."""
+    creators = []
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "VirtualBusEcuServer"
+            ):
+                creators.append(path.relative_to(PACKAGE_DIR).as_posix())
+    assert creators == ["hardware/uds_link.py"]

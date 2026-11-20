@@ -69,3 +69,18 @@ dyno_frontal_area_m2 = 2.0
 dyno_drivetrain_loss = 0.15        # fraction lost between crank and wheels
 dyno_rolling_resistance = 0.013
 dyno_air_density_kg_m3 = 1.06      # about 1200 m altitude
+
+# UDS ECU identification over CAN (read-only: DIDs via 0x22, DTCs via 0x19).
+# can_interface: "virtual-sim" = simulated ECU on python-can's in-process virtual bus
+# (every value it returns is simulated); real interfaces need the [can] extra and a channel:
+# "slcan" (COM5, /dev/ttyACM0), "pcan" (PCAN_USBBUS1), "gs_usb", "kvaser" (0), "socketcan" (can0).
+# Env: IRAN_OBD_TUNER_CAN_INTERFACE, IRAN_OBD_TUNER_CAN_CHANNEL, ...
+can_interface = "virtual-sim"
+# can_channel = "COM5"
+can_bitrate = 500000
+# ISO 15765-4 default engine ECU pair. NOT verified for any specific vehicle
+# (e.g. the Peugeot Pars TU5): use the dashboard's "discover ECUs" first.
+uds_request_id = "0x7E0"
+uds_response_id = "0x7E8"
+isotp_padding = "0xCC"             # "none" to send unpadded frames
+# The extended diagnostic session (0x10 0x03) is intentionally not configurable here.

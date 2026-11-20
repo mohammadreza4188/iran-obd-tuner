@@ -663,3 +663,75 @@ def test_disconnect_aborts_a_running_measurement(window: MainWindow) -> None:
     settle(window)
 
     assert window.perf_view.timer.state.value == "aborted"
+
+
+# --------------------------------------------------------------------------- UDS panel
+
+
+def _uds_view_rows(window: MainWindow) -> list[list[str]]:
+    table = window.uds_view.did_table
+    return [
+        [table.item(row, col).text() for col in range(table.columnCount())]
+        for row in range(table.rowCount())
+    ]
+
+
+def test_uds_panel_reads_the_simulated_ecu_and_says_so(window: MainWindow) -> None:
+    pytest.importorskip("can", reason="needs the optional [can] extra")
+    window.lang_combo.setCurrentIndex(1)  # English
+    view = window.uds_view
+
+    assert view.extended_check.isChecked() is False  # opt-in, off by default
+    assert COPY["en"]["uds_safety"] == view.safety_label.text()
+    view.discover_btn.click()
+    assert not view.read_btn.isEnabled()  # one UDS job at a time
+    settle(window)
+    view.read_btn.click()
+    settle(window)
+
+    rows = _uds_view_rows(window)
+    assert rows[0][:3] == ["F190", "VIN", "SIMULATEDVIN00004"]
+    assert rows[-1][0] == "F197" and rows[-1][2] == "—"  # extended-only, not requested
+    assert view.banner.text() == COPY["en"]["uds_banner_sim"]
+    assert "7E8" in view.status_label.text()
+    assert view.dtc_table.rowCount() == 2
+    assert any("UDS ECU identification read" in line for line in _log_texts(window))
+
+
+def test_uds_panel_extended_session_checkbox_enables_the_fallback(window: MainWindow) -> None:
+    pytest.importorskip("can", reason="needs the optional [can] extra")
+    window.lang_combo.setCurrentIndex(1)
+    window.uds_view.extended_check.setChecked(True)
+    window.uds_view.read_btn.click()
+    settle(window)
+
+    last = _uds_view_rows(window)[-1]
+    assert last[2] == "SIMULATED ECU"
+    assert COPY["en"]["uds_session_ext"] in last[3]
+    assert COPY["en"]["uds_ext_used"] in window.uds_view.status_label.text()
+
+
+def test_uds_panel_real_interface_without_channel_fails_without_simulating(
+    window: MainWindow,
+) -> None:
+    window.lang_combo.setCurrentIndex(1)
+    view = window.uds_view
+    view.interface_combo.setCurrentIndex(view.interface_combo.findData("slcan"))
+
+    assert view.channel_edit.isEnabled()
+    assert view.banner.text() == COPY["en"]["uds_banner_real"]
+    view.read_btn.click()
+    settle(window)
+
+    assert "a CAN channel is required" in view.status_label.text()
+    assert view.did_table.rowCount() == 0
+    assert view.banner.text() == COPY["en"]["uds_banner_real"]
+    assert view.read_btn.isEnabled()  # not left busy
+
+
+def test_uds_panel_is_translated(window: MainWindow) -> None:
+    view = window.uds_view
+    assert view.read_btn.text() == COPY["fa"]["uds_read_btn"]
+    window.lang_combo.setCurrentIndex(1)
+    assert view.read_btn.text() == COPY["en"]["uds_read_btn"]
+    assert view.interface_combo.itemText(0) == COPY["en"]["uds_iface_sim"]

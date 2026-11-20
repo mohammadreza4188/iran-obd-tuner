@@ -9,7 +9,9 @@ Services implemented - all of them reads:
 * ``0x3E`` TesterPresent (``0x00``, or ``0x80`` = suppress positive response);
 * ``0x22`` ReadDataByIdentifier, one DID per request;
 * ``0x19`` ReadDTCInformation, sub-functions ``0x01`` (count + DTC format) and ``0x02``
-  (reportDTCByStatusMask).
+  (reportDTCByStatusMask);
+* :func:`discover_ecus`: one functional ``0x3E 0x00`` on ``0x7DF`` (ISO 15765-4), only
+  when the user asks for it.
 
 Safety: every request passes :func:`check_request_allowed` - the single choke point between
 this client and the bus - before it is sent. The allowlist is default-deny: any service not
@@ -41,8 +43,10 @@ from iran_obd_tuner.core.exceptions import (
     UnsupportedOperationError,
 )
 from iran_obd_tuner.core.logging import get_logger
+from iran_obd_tuner.core.traffic import TrafficLog
+from iran_obd_tuner.hardware.can_bus import CanBus
 from iran_obd_tuner.hardware.elm327_protocol import decode_dtc_pair
-from iran_obd_tuner.hardware.isotp import IsoTpChannel
+from iran_obd_tuner.hardware.isotp import IsoTpChannel, functional_request
 
 __all__ = [
     "ALLOWED_REQUESTS",
@@ -57,6 +61,7 @@ __all__ = [
     "check_request_allowed",
     "decode_did_text",
     "decode_uds_dtc",
+    "discover_ecus",
     "parse_dtc_records",
 ]
 
@@ -444,3 +449,41 @@ class UdsClient:
             except Exception as exc:  # report; the ECU falls back by itself after S3
                 _LOG.warning("could not return to the default session: %s", exc)
                 self._session = SESSION_DEFAULT
+
+
+#: ISO 15765-4 11-bit functional request identifier and physical response identifiers.
+FUNCTIONAL_REQUEST_ID = 0x7DF
+OBD_RESPONSE_IDS = range(0x7E8, 0x7F0)
+
+
+def discover_ecus(
+    bus: CanBus,
+    *,
+    functional_id: int = FUNCTIONAL_REQUEST_ID,
+    response_ids: range | tuple[int, ...] = OBD_RESPONSE_IDS,
+    window_s: float = 0.3,
+    padding: int | None = 0xCC,
+    clock: Callable[[], float] = time.monotonic,
+    traffic_log: TrafficLog | None = None,
+    adapter_name: str = "can",
+) -> tuple[int, ...]:
+    """Response identifiers that answered one functional TesterPresent (``3E 00``).
+
+    The request passes :func:`check_request_allowed` like every other request. Only
+    positive answers (``7E 00``) count; the result is sorted.
+    """
+    request = bytes([SID_TESTER_PRESENT, 0x00])
+    check_request_allowed(request)
+    answers = functional_request(
+        bus,
+        functional_id,
+        request,
+        response_ids,
+        window_s,
+        padding=padding,
+        clock=clock,
+        traffic_log=traffic_log,
+        adapter_name=adapter_name,
+    )
+    positive = bytes([SID_TESTER_PRESENT + 0x40, 0x00])
+    return tuple(sorted(rid for rid, payload in answers.items() if payload[:2] == positive))

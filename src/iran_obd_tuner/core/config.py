@@ -26,6 +26,7 @@ from iran_obd_tuner.core.logging import normalize_log_level
 from iran_obd_tuner.core.pids import DEFAULT_LIVE_DATA_PIDS, is_valid_pid, normalize_pid
 
 __all__ = [
+    "CAN_INTERFACE_CHOICES",
     "DEFAULT_CONFIG_FILE",
     "ENV_PREFIX",
     "AppSettings",
@@ -99,6 +100,57 @@ def _as_optional_positive_float(raw: Any, field: str) -> float | None:
     return None if not text else _as_positive_float(text, field)
 
 
+#: CAN interfaces for UDS identification. Kept in sync with
+#: ``iran_obd_tuner.hardware.uds_link.LINK_INTERFACES`` by a test (core imports no hardware).
+CAN_INTERFACE_CHOICES: tuple[str, ...] = (
+    "virtual-sim",
+    "slcan",
+    "pcan",
+    "gs_usb",
+    "kvaser",
+    "socketcan",
+)
+
+
+def _as_can_interface(raw: Any, field: str) -> str:
+    text = _as_text(raw, field).lower()
+    if text not in CAN_INTERFACE_CHOICES:
+        raise ConfigurationError(
+            f"setting {field!r} must be one of {', '.join(CAN_INTERFACE_CHOICES)}, got {raw!r}"
+        )
+    return text
+
+
+def _as_int_in_range(raw: Any, field: str, maximum: int) -> int:
+    """An integer given as a number or as text (``"0x7E0"``, ``"2016"``)."""
+    if isinstance(raw, bool):
+        raise ConfigurationError(f"setting {field!r} must be an integer, got {raw!r}")
+    if isinstance(raw, int):
+        value = raw
+    else:
+        try:
+            value = int(str(raw).strip(), 0)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"setting {field!r} must be an integer such as 0x7E0, got {raw!r}"
+            ) from exc
+    if not 0 <= value <= maximum:
+        raise ConfigurationError(
+            f"setting {field!r} must be within 0..{maximum:#x}, got {value:#x}"
+        )
+    return value
+
+
+def _as_can_id(raw: Any, field: str) -> int:
+    return _as_int_in_range(raw, field, 0x7FF)
+
+
+def _as_optional_byte(raw: Any, field: str) -> int | None:
+    if isinstance(raw, str) and raw.strip().lower() in ("", "none"):
+        return None
+    return _as_int_in_range(raw, field, 0xFF)
+
+
 def _as_log_level(raw: Any, field: str) -> str:
     try:
         return normalize_log_level(str(raw))
@@ -146,6 +198,12 @@ FIELD_CASTERS: Mapping[str, Callable[[Any, str], Any]] = {
     "dyno_drivetrain_loss": _as_non_negative_float,
     "dyno_rolling_resistance": _as_non_negative_float,
     "dyno_air_density_kg_m3": _as_positive_float,
+    "can_interface": _as_can_interface,
+    "can_channel": _as_optional_text,
+    "can_bitrate": _as_positive_int,
+    "uds_request_id": _as_can_id,
+    "uds_response_id": _as_can_id,
+    "isotp_padding": _as_optional_byte,
 }
 
 
@@ -168,6 +226,15 @@ class AppSettings:
             them for the session). ``dyno_curb_mass_kg`` has no default on purpose: the
             vehicle's mass must come from the user. Ranges are checked by
             :class:`iran_obd_tuner.diagnostics.dyno.VehicleParameters`.
+        can_interface: CAN interface for UDS identification; ``virtual-sim`` (default) is
+            the simulated ECU on python-can's virtual bus.
+        can_channel: Channel of a real CAN interface (``COM5``, ``PCAN_USBBUS1``, ``can0``).
+        can_bitrate: CAN bitrate in bit/s.
+        uds_request_id / uds_response_id: 11-bit physical UDS identifiers (ISO 15765-4
+            defaults; not verified for any specific vehicle).
+        isotp_padding: ISO-TP padding byte, or ``None`` (``"none"`` in a file) for none.
+            (The UDS extended session is deliberately *not* a setting: it can only be
+            enabled per run, in code or in the dashboard.)
         config_file: File the settings were loaded from, or ``None`` for pure defaults.
     """
 
@@ -188,6 +255,12 @@ class AppSettings:
     dyno_drivetrain_loss: float = 0.15
     dyno_rolling_resistance: float = 0.013
     dyno_air_density_kg_m3: float = 1.06
+    can_interface: str = "virtual-sim"
+    can_channel: str | None = None
+    can_bitrate: int = 500_000
+    uds_request_id: int = 0x7E0
+    uds_response_id: int = 0x7E8
+    isotp_padding: int | None = 0xCC
     config_file: Path | None = None
 
     def __post_init__(self) -> None:
@@ -198,6 +271,12 @@ class AppSettings:
         if self.connect_timeout_s <= 0 or self.command_timeout_s <= 0:
             raise ConfigurationError("timeouts must be positive")
         normalize_log_level(self.log_level)
+        if self.can_interface not in CAN_INTERFACE_CHOICES:
+            raise ConfigurationError(f"unsupported can_interface {self.can_interface!r}")
+        if self.can_bitrate <= 0:
+            raise ConfigurationError("setting 'can_bitrate' must be positive")
+        if self.uds_request_id == self.uds_response_id:
+            raise ConfigurationError("uds_request_id and uds_response_id must differ")
         for pid in self.live_data_pids:
             if not is_valid_pid(pid):
                 raise ConfigurationError(f"invalid PID identifier {pid!r} in 'live_data_pids'")

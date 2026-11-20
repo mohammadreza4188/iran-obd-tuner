@@ -125,6 +125,70 @@ def fake_can_bus(fake_clock):
     return build
 
 
+class SimUdsResponder:
+    """Plays the ECU side of ISO-TP for :class:`FakeCanBus` (single-threaded).
+
+    Requests reaching the responder are handed to a
+    :class:`~iran_obd_tuner.hardware.uds_sim.SimulatedUdsEcu`; its answers are framed as
+    Single Frames or as First Frame + Consecutive Frames released by the Flow Control.
+    """
+
+    def __init__(self, ecu, response_id: int = 0x7E8) -> None:
+        self.ecu = ecu
+        self.response_id = response_id
+        self.pending_cfs: list = []
+
+    def _pad(self, data: bytes):
+        from iran_obd_tuner.hardware.can_bus import CanFrame
+
+        return CanFrame(self.response_id, data + bytes([0xCC]) * (8 - len(data)))
+
+    def _encode(self, response: bytes) -> list:
+        if len(response) <= 7:
+            return [self._pad(bytes([len(response)]) + response)]
+        n = len(response)
+        frames = [self._pad(bytes([0x10 | (n >> 8), n & 0xFF]) + response[:6])]
+        rest, seq = response[6:], 1
+        while rest:
+            self.pending_cfs.append(self._pad(bytes([0x20 | seq]) + rest[:7]))
+            rest, seq = rest[7:], (seq + 1) & 0x0F
+        return frames
+
+    def __call__(self, frame) -> list:
+        pci = frame.data[0] >> 4
+        if pci == 3:
+            out, self.pending_cfs = self.pending_cfs, []
+            return out
+        if pci != 0:
+            return []
+        request = frame.data[1 : 1 + (frame.data[0] & 0x0F)]
+        frames: list = []
+        for response in self.ecu.handle(request):
+            frames.extend(self._encode(response))
+        return frames
+
+
+@pytest.fixture
+def make_uds_client(fake_can_bus):
+    """Factory: ``make_uds_client(ecu=None, **client_kwargs)`` -> (client, ecu, bus).
+
+    The client talks ISO-TP over a :class:`FakeCanBus` whose other side is the simulated
+    ECU, so every exchange is deterministic and nothing touches a CAN interface.
+    """
+    from iran_obd_tuner.hardware.isotp import IsoTpChannel, IsoTpConfig
+    from iran_obd_tuner.hardware.uds import UdsClient
+    from iran_obd_tuner.hardware.uds_sim import SimulatedUdsEcu
+
+    def build(ecu=None, **kwargs):
+        ecu = ecu or SimulatedUdsEcu()
+        bus = fake_can_bus(SimUdsResponder(ecu))
+        channel = IsoTpChannel(bus, IsoTpConfig(0x7E0, 0x7E8), clock=bus.clock, sleep=bus.sleep)
+        client = UdsClient(channel, clock=bus.clock, sleep=bus.sleep, **kwargs)
+        return client, ecu, bus
+
+    return build
+
+
 # --------------------------------------------------------------------------- #
 # ELM327: scripted serial transport (no hardware, no serial port)
 # --------------------------------------------------------------------------- #

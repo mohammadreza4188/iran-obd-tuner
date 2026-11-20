@@ -39,7 +39,7 @@ python -m iran_obd_tuner diagnose
 |---|---|---|
 | `dev` | pytest, ruff | همیشه (برای همه اعضا) |
 | `obd` | pyserial | آداپتور واقعی ELM327 (درایور خود پروژه؛ python-OBD دیگر استفاده نمی‌شود) |
-| `can` | python-can | کار روی CAN (فاز ۲+) |
+| `can` | python-can | شناسایی UDS روی CAN (`uds-ident`، بخش UDS داشبورد) و تست‌های باس مجازی (فاز ۲+) |
 | `bench` | udsoncan, crcmod | کار روی Bench/UDS و چک‌سام (فاز ۴+) |
 | `gui` | PySide6, pyqtgraph | کار روی رابط گرافیکی (فاز ۱) |
 | `full` | همه موارد بالا | اجرای کامل نرم‌افزار دسکتاپ |
@@ -64,6 +64,15 @@ cp config/example.toml config/local.toml
 | `IRAN_OBD_TUNER_LOG_FILE` | `log_file` | خالی (فقط stderr) |
 | `IRAN_OBD_TUNER_OUTPUT_DIR` | `output_dir` | `output` |
 | `IRAN_OBD_TUNER_KNOWLEDGE_DIR` | `knowledge_dir` | خالی |
+| `IRAN_OBD_TUNER_CAN_INTERFACE` | `can_interface` | `virtual-sim` (ECU شبیه‌سازی) |
+| `IRAN_OBD_TUNER_CAN_CHANNEL` | `can_channel` | خالی (برای رابط واقعی لازم) |
+| `IRAN_OBD_TUNER_CAN_BITRATE` | `can_bitrate` | `500000` |
+| `IRAN_OBD_TUNER_UDS_REQUEST_ID` | `uds_request_id` | `0x7E0` |
+| `IRAN_OBD_TUNER_UDS_RESPONSE_ID` | `uds_response_id` | `0x7E8` |
+| `IRAN_OBD_TUNER_ISOTP_PADDING` | `isotp_padding` | `0xCC` (`none` = بدون padding) |
+
+جلسه Extended در UDS عمداً تنظیم **ندارد** (نه در فایل، نه در محیط)؛ فقط برای هر اجرا با
+`uds-ident --extended-session` یا چک‌باکس داشبورد فعال می‌شود.
 
 ترتیب اولویت: پیش‌فرض کد ← فایل TOML ← متغیر محیطی. کلید ناشناخته خطا می‌دهد.
 `config/local.toml` و `.env` در `.gitignore` هستند.
@@ -79,6 +88,7 @@ python -m pytest -q -k diagnostic          # انتخاب بر اساس نام
 python -m ruff check . && python -m ruff format .
 python -m iran_obd_tuner diagnose --json | python -m json.tool
 python -m iran_obd_tuner config            # تنظیمات نهایی و منبع آن‌ها
+python -m iran_obd_tuner uds-ident --discover --json   # UDS روی باس مجازی + ECU شبیه‌سازی ([can])
 
 # داشبورد گرافیکی (نیازمند [gui])
 iran-obd-tuner-gui
@@ -132,6 +142,21 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
 شبیه‌سازی و مانند یک آداپتور نمونه‌برداری می‌کند؛ اگر الگوریتم را تغییر دادید، این تست باید با
 همان تلرانس‌ها پاس شود. `LiveDataSession(clock=...)` ساعت قابل تزریق دارد.
 
+### CAN، ISO-TP و UDS: تست بدون سخت‌افزار
+
+دو سطح تست وجود دارد و هیچ‌کدام رابط CAN فیزیکی باز نمی‌کند:
+
+- **قطعی و تک‌thread:** `FakeCanBus` در `tests/conftest.py` فریم‌ها را ثبت می‌کند و با ساعت جعلی
+  timeout می‌دهد؛ `make_uds_client` یک `UdsClient` واقعی روی ISO-TP واقعی می‌سازد که طرف دیگرش
+  `SimulatedUdsEcu` است (`tests/unit/test_isotp.py`, `test_uds.py`, `test_ecu_identification.py`).
+- **انتها به انتها:** باس `virtual` python-can با `VirtualBusEcuServer` در thread جدا
+  (`tests/integration/test_uds_virtual_bus.py`, `test_uds_cli_and_dashboard.py`)؛ بدون `[can]`
+  خودکار skip می‌شوند.
+
+برای رفتار ECU جدید (NRC، پاسخ نداشتن، قالب DTC دیگر) از `SimulatedUdsEcu` ارث‌بری کنید یا
+`SimulatedEcuConfig` بسازید. سرویس جدید UDS فقط پس از افزودن به `ALLOWED_REQUESTS` قابل ارسال است
+و تست فهرست سفید (`test_allowlist_is_exactly_the_read_only_set`) باید آگاهانه به‌روز شود.
+
 ### داشبورد: مسیر داده
 
 پنجره هیچ‌وقت آداپتور نمی‌سازد. `app/dashboard.py` (`AppDashboardBackend`) حالت «شبیه‌سازی» را
@@ -173,10 +198,16 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
 
 ## ۶. CI
 
-`.github/workflows/ci.yml` روی هر push به `main` و هر PR اجرا می‌شود: پایتون ۳٫۱۱/۳٫۱۲/۳٫۱۳،
-`pip install -e ".[dev]"`، سپس `ruff check`، `ruff format --check` و `pytest`.
-extras سخت‌افزاری/گرافیکی در CI نصب **نمی‌شوند** (چون بدون سخت‌افزار واقعی قابل اعتبارسنجی
-نیستند). اگر تغییری فقط با `[obd]`/`[gui]` قابل تست است، در توضیح PR بنویسید که دستی بررسی شده.
+`.github/workflows/ci.yml` روی هر push به `main` و هر PR اجرا می‌شود:
+
+- job `checks` روی پایتون ۳٫۱۱/۳٫۱۲/۳٫۱۳: `pip install -e ".[dev,can]"`، سپس `ruff check`،
+  `ruff format --check` و `pytest`. python-can خالص پایتون است و تست‌های UDS فقط از باس مجازی
+  درون‌پردازه‌ای آن استفاده می‌کنند.
+- job `no-extras` روی پایتون ۳٫۱۱: فقط `[dev]`؛ ثابت می‌کند بسته و تست‌ها بدون وابستگی‌های اختیاری
+  هم کار می‌کنند (تست‌های وابسته skip می‌شوند).
+
+`[gui]` و `[obd]` در CI نصب **نمی‌شوند**. اگر تغییری فقط با آن‌ها قابل تست است، در توضیح PR
+بنویسید که دستی بررسی شده.
 
 ## ۷. عیب‌یابی
 

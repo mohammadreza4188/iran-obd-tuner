@@ -11,14 +11,32 @@ extra.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.diagnostics.dyno import VehicleParameters
+from iran_obd_tuner.diagnostics.ecu_identification import UdsIdentificationSession
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 
-__all__ = ["DashboardBackend"]
+__all__ = ["CanDefaults", "DashboardBackend"]
+
+
+@dataclass(frozen=True, slots=True)
+class CanDefaults:
+    """What the UDS identification panel starts with (from the settings).
+
+    Attributes:
+        interfaces: Selectable interfaces; ``simulated_interface`` is the simulated ECU.
+        interface / channel / bitrate: Initial selection.
+    """
+
+    interfaces: tuple[str, ...]
+    simulated_interface: str
+    interface: str
+    channel: str | None
+    bitrate: int
 
 
 class DashboardBackend(Protocol):
@@ -41,6 +59,27 @@ class DashboardBackend(Protocol):
 
     def list_serial_ports(self) -> tuple[str, ...]:
         """Serial ports the operating system reports (nothing is opened)."""
+        ...
+
+    @property
+    def can_defaults(self) -> CanDefaults:
+        """Initial choices of the UDS identification panel."""
+        ...
+
+    def create_uds_session(
+        self,
+        *,
+        interface: str,
+        channel: str | None,
+        bitrate: int,
+        allow_extended_session: bool,
+    ) -> UdsIdentificationSession:
+        """Build a one-shot UDS identification session (nothing is opened yet).
+
+        Raises:
+            ConfigurationError: Unsupported interface or invalid parameters. A real
+                interface never falls back to the simulated ECU.
+        """
         ...
 
     def create_session(self, *, simulation: bool, port: str | None) -> LiveDataSession:
