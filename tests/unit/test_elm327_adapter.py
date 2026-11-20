@@ -6,8 +6,11 @@ No serial port is opened: the adapter is given a transport factory that returns 
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from iran_obd_tuner.core.dtc import DtcStatus
 from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
     AdapterTimeoutError,
@@ -20,6 +23,7 @@ from iran_obd_tuner.core.models import Unit
 from iran_obd_tuner.core.safety import OperationClass, SafetyPolicy
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession, PidStatus
+from iran_obd_tuner.diagnostics.models import ReadOutcome
 from iran_obd_tuner.diagnostics.service import DiagnosticService
 from iran_obd_tuner.hardware.elm327 import Elm327Adapter
 
@@ -311,11 +315,15 @@ def test_every_command_a_full_session_sends_is_read_only(make_adapter) -> None:
     session.poll(["010C", "010D", "0105", "0142", "012F", "0111", "010F", "0104", "0110"])
     session.read_trouble_codes()
     session.read_vehicle_info()
+    session.read_monitor_status()
+    session.read_trouble_code_categories()
+    session.read_freeze_frame()
     session.disconnect()
 
-    allowed_prefixes = ("AT", "01", "03", "09")
-    assert all(command.startswith(allowed_prefixes) for command in transport.written)
-    assert not any(command.startswith("04") for command in transport.written)
+    allowed = re.compile(r"^(AT[A-Z0-9]+|01[0-9A-F]{2}|02[0-9A-F]{2}00|03|07|0A|09[0-9A-F]{2})$")
+    assert all(allowed.match(command) for command in transport.written), transport.written
+    assert not any(command.startswith(("04", "08")) for command in transport.written)
+    assert {"07", "0A", "0101", "020200"} <= set(transport.written)
 
 
 # --------------------------------------------------------------------------- #
@@ -350,3 +358,96 @@ def test_report_carries_the_negotiated_protocol_and_real_data_flag(make_adapter)
     assert report.vehicle.vin == "1D4GP00R55B123456"
     assert [code.code for code in report.trouble_codes] == ["P0133", "P0171"]
     assert transport.closed is True  # the one-shot workflow closes the port
+
+
+# --------------------------------------------------------------------------- #
+# M3: PID 0101, services 07 / 0A, freeze frame 00
+# --------------------------------------------------------------------------- #
+
+
+def test_monitor_status_is_read_from_pid_0101(make_adapter) -> None:
+    adapter, _transport = make_adapter()
+    adapter.connect()
+
+    status = adapter.read_monitor_status()
+
+    assert (status.mil_on, status.confirmed_dtc_count) == (True, 2)
+    assert status.incomplete_monitors == ("evaporative_system",)
+
+
+def test_monitor_status_unsupported_by_the_bitmask_is_not_requested(
+    make_adapter, can_vehicle_script
+) -> None:
+    can_vehicle_script["0100"] = "41 00 3E 3E B8 11"  # bit for 01 cleared
+    adapter, transport = make_adapter()
+    adapter.connect()
+
+    with pytest.raises(UnsupportedPidError, match="0101"):
+        adapter.read_monitor_status()
+    assert "0101" not in transport.written
+
+
+def test_pending_and_permanent_codes(make_adapter, can_vehicle_script) -> None:
+    adapter, _transport = make_adapter()
+    adapter.connect()
+
+    assert adapter.read_trouble_codes(DtcStatus.PENDING) == ("P0420",)
+    with pytest.raises(UnsupportedOperationError, match="does not support service 0A"):
+        adapter.read_trouble_codes(DtcStatus.PERMANENT)
+
+
+def test_permanent_codes_on_a_supporting_ecu(make_adapter, can_vehicle_script) -> None:
+    can_vehicle_script["0A"] = "4A 01 03 01"
+    adapter, _transport = make_adapter()
+    adapter.connect()
+
+    assert adapter.read_trouble_codes(DtcStatus.PERMANENT) == ("P0301",)
+
+
+def test_freeze_frame_reads_only_stored_parameters(make_adapter) -> None:
+    adapter, transport = make_adapter()
+    adapter.connect()
+
+    assert adapter.read_freeze_frame_trigger() == "P0133"
+    supported = adapter.read_freeze_frame_supported_pids()
+    rpm = adapter.read_freeze_frame_value("010C")
+    trim = adapter.read_freeze_frame_value("0106")
+    sent_before = len(transport.written)
+    with pytest.raises(UnsupportedPidError, match="not stored in the freeze frame"):
+        adapter.read_freeze_frame_value("0111")
+
+    assert {"010C", "010D", "0106"} <= set(supported) and "0111" not in supported
+    assert rpm.value == 2410.0
+    assert trim.value == pytest.approx(-3.125)
+    assert len(transport.written) == sent_before  # unsupported: nothing was sent
+    assert transport.written.count("020000") == 1  # the bitmask is cached
+
+
+def test_freeze_frame_no_data_is_a_timeout(make_adapter) -> None:
+    adapter, _transport = make_adapter()
+    adapter.connect()
+
+    with pytest.raises(AdapterTimeoutError):
+        adapter.read_freeze_frame_value("010D")
+
+
+def test_report_over_elm327_has_all_m3_sections(make_adapter) -> None:
+    adapter, _transport = make_adapter()
+    service = DiagnosticService(adapter, JsonKnowledgeRepository(), live_data_pids=["010C"])
+
+    report = service.collect_report()
+
+    assert report.monitor_status is not None and report.monitor_status.status is not None
+    assert report.monitor_status.status.mil_on is True
+    outcomes = {c.status: c.outcome for c in report.dtc_categories}
+    assert outcomes == {
+        DtcStatus.STORED: ReadOutcome.OK,
+        DtcStatus.PENDING: ReadOutcome.OK,
+        DtcStatus.PERMANENT: ReadOutcome.UNSUPPORTED,
+    }
+    frame = report.freeze_frame
+    assert frame is not None and frame.present and frame.trigger.code == "P0133"
+    statuses = {r.pid: r.status for r in frame.readings}
+    assert statuses["010C"] is PidStatus.OK
+    assert statuses["010D"] is PidStatus.NO_RESPONSE
+    assert statuses["0111"] is PidStatus.UNSUPPORTED

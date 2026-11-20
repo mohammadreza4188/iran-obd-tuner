@@ -13,6 +13,7 @@ from iran_obd_tuner.core.exceptions import (
     AdapterTimeoutError,
     ProtocolError,
     SafetyGuardError,
+    UnsupportedOperationError,
 )
 from iran_obd_tuner.core.pids import PID_CATALOG, decode_pid_value
 from iran_obd_tuner.hardware import elm327_protocol as proto
@@ -341,3 +342,119 @@ def test_protocol_number_with_and_without_auto_prefix() -> None:
 def test_unknown_or_inactive_protocol_is_an_error(reply: str) -> None:
     with pytest.raises(ProtocolError):
         proto.parse_dpn([reply])
+
+
+# --------------------------------------------------------------------------- #
+# M3: services 07 / 0A, negative responses, PID 0101, freeze frame 00
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", ["07", "0A", "0a", "020C00", "020200", "020000", "0101"])
+def test_m3_read_only_requests_are_allowed(command: str) -> None:
+    assert proto.check_command_allowed(command) == command.upper()
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["020C01", "020C", "02", "0700", "0A00", "05", "0600", "04", "0400", "08", "14 FF FF FF"],
+)
+def test_m3_other_frames_and_services_stay_refused(command: str) -> None:
+    with pytest.raises(SafetyGuardError):
+        proto.check_command_allowed(command)
+
+
+@pytest.mark.parametrize(
+    ("service", "lines", "can", "codes"),
+    [
+        (0x07, ["47 01 04 20"], True, ("P0420",)),
+        (0x07, ["47 00"], True, ()),  # a real "no pending codes" answer
+        (0x0A, ["4A 02 03 01 01 71"], True, ("P0301", "P0171")),
+        (0x07, ["47 04 20 00 00 00 00"], False, ("P0420",)),
+        (0x0A, ["4A 00 00 00 00 00 00"], False, ()),
+        (
+            0x07,
+            ["00A", "0: 47 04 01 33 01 71", "1: 03 01 04 20 00 00 00"],
+            True,
+            ("P0133", "P0171", "P0301", "P0420"),
+        ),
+    ],
+)
+def test_pending_and_permanent_code_replies(service, lines, can, codes) -> None:
+    messages = proto.parse_messages(lines)
+
+    assert proto.parse_dtc_reply(messages, service, can=can) == codes
+
+
+def test_a_reply_for_another_service_is_not_accepted() -> None:
+    with pytest.raises(ProtocolError, match="no service 0A reply"):
+        proto.parse_dtc_reply([bytes.fromhex("43020133")], 0x0A, can=True)
+
+
+@pytest.mark.parametrize(
+    ("line", "error"),
+    [
+        ("7F 0A 11", UnsupportedOperationError),
+        ("7F 07 12", UnsupportedOperationError),
+        ("7F 02 31", proto.NoDataError),
+        ("7F 0A 78", ProtocolError),
+        ("7F 0A 22", ProtocolError),
+    ],
+)
+def test_negative_responses(line: str, error: type[Exception]) -> None:
+    service = int(line.split()[1], 16)
+    with pytest.raises(error):
+        proto.check_negative_response(proto.parse_messages([line]), service)
+
+
+def test_a_negative_answer_from_one_ecu_is_ignored_when_another_answers() -> None:
+    messages = proto.parse_messages(["7F 07 11", "47 01 04 20"])
+
+    assert proto.parse_dtc_reply(messages, 0x07, can=True) == ("P0420",)
+
+
+def test_monitor_status_of_one_and_two_ecus() -> None:
+    one = proto.parse_monitor_status(proto.parse_messages(["41 01 82 07 65 04"]))
+    two = proto.parse_monitor_status(
+        proto.parse_messages(["41 01 01 07 65 04", "41 01 81 00 00 00"])
+    )
+
+    assert (one.mil_on, one.confirmed_dtc_count, one.ecu_count) == (True, 2, 1)
+    assert (two.mil_on, two.confirmed_dtc_count, two.ecu_count) == (True, 2, 2)
+    with pytest.raises(ProtocolError, match="0101"):
+        proto.parse_monitor_status(proto.parse_messages(["41 0C 1A F8"]))
+
+
+def test_freeze_frame_bitmask_trigger_and_values() -> None:
+    supported = proto.parse_freeze_frame_supported(
+        proto.parse_messages(["42 00 00 5E 18 00 00"]), 0x00
+    )
+    trigger = proto.parse_freeze_frame_trigger(proto.parse_messages(["42 02 00 01 33"]))
+    rpm = proto.parse_freeze_frame_data(proto.parse_messages(["42 0C 00 25 A8"]), 0x0C, 2)
+
+    assert supported == {0x02, 0x04, 0x05, 0x06, 0x07, 0x0C, 0x0D}
+    assert trigger == "P0133"
+    assert rpm == b"\x25\xa8"
+
+
+def test_no_stored_freeze_frame_is_none_not_a_code() -> None:
+    assert proto.parse_freeze_frame_trigger(proto.parse_messages(["42 02 00 00 00"])) is None
+
+
+@pytest.mark.parametrize(
+    ("lines", "match"),
+    [
+        (["42 0C 01 25 A8"], "frame 01"),  # another frame
+        (["42 0C 00 25"], "1 data byte"),  # too short
+        (["41 0C 25 A8"], "no reply to 020C00"),  # a service 01 answer
+        (["7F 02 12"], "does not support"),
+    ],
+)
+def test_freeze_frame_edge_cases(lines: list[str], match: str) -> None:
+    with pytest.raises((ProtocolError, UnsupportedOperationError), match=match):
+        proto.parse_freeze_frame_data(proto.parse_messages(lines), 0x0C, 2)
+
+
+def test_fuel_trim_scaling() -> None:
+    assert decode_pid_value("0106", b"\x80") == 0.0
+    assert decode_pid_value("0107", b"\x00") == -100.0
+    assert decode_pid_value("0106", b"\xff") == pytest.approx(99.22, abs=0.01)

@@ -67,7 +67,7 @@ def test_diagnose_accepts_an_explicit_parameter_list(capsys: pytest.CaptureFixtu
     out = capsys.readouterr().out
     assert "vin=unknown" in out
     assert "010C" in out
-    assert "0111" not in out
+    assert "0111  Throttle position" not in out  # not requested as a measurement
 
 
 def test_declared_but_unimplemented_adapter_fails_with_a_message(
@@ -111,3 +111,16 @@ def test_configuration_file_is_honoured(
     payload = json.loads(capsys.readouterr().out)
 
     assert [m["pid"] for m in payload["measurements"]] == ["010C"]
+
+
+def test_diagnose_prints_mil_categories_and_freeze_frame(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["diagnose"]) == 0
+    out = capsys.readouterr().out
+
+    assert "MIL (check engine): ON; confirmed codes: 3" in out
+    assert "pending trouble codes (service 07) (1):" in out
+    assert "permanent trouble codes (service 0A) (1):" in out
+    assert "freeze frame 00 (trigger P0301):" in out
+    assert "(unsupported)" in out  # throttle is not in the simulated freeze frame

@@ -145,6 +145,20 @@ CAN_VEHICLE: dict[str, Reply] = {
     "010D": "NO DATA",  # supported, but the ECU does not answer
     "0902": "014\n0: 49 02 01 31 44 34\n1: 47 50 30 30 52 35 35\n2: 42 31 32 33 34 35 36",
     "03": "43 02 01 33 01 71",
+    # PID 0101: MIL on, 2 confirmed codes; spark; common monitors available + complete;
+    # catalyst, evap, O2 sensor and heater available; evap (D bit 2) not complete.
+    "0101": "41 01 82 07 65 04",
+    "07": "47 01 04 20",  # one pending code: P0420
+    "0A": "7F 0A 11",  # this ECU does not support permanent codes (serviceNotSupported)
+    # Freeze frame 00: trigger P0133; stored PIDs 02, 04-07, 0C, 0D (bitmask 5E 18 00 00).
+    "020200": "42 02 00 01 33",
+    "020000": "42 00 00 5E 18 00 00",
+    "020400": "42 04 00 73",  # 115 * 100 / 255 = 45.1 %
+    "020500": "42 05 00 80",  # 128 - 40 = 88 degC
+    "020600": "42 06 00 7C",  # 124 * 100 / 128 - 100 = -3.1 %
+    "020700": "42 07 00 86",  # 134 * 100 / 128 - 100 = 4.7 %
+    "020C00": "42 0C 00 25 A8",  # 9640 / 4 = 2410 rpm
+    "020D00": "NO DATA",  # stored per the bitmask, but the ECU does not answer
 }
 
 

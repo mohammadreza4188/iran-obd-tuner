@@ -182,12 +182,19 @@ def test_simulated_session_drives_gauges_codes_and_banner(window: MainWindow) ->
     assert window.gauges["rpm"].gauge.value > 0
     assert window.gauges["coolant"].gauge.value is not None
 
-    texts = [window.dtc_list.item(i).text() for i in range(window.dtc_list.count())]
+    texts = window.diag_view.item_texts()
     # descriptions come from the knowledge database, not from strings in the UI
-    assert texts == [
-        "P0300  —  Random/multiple cylinder misfire detected",
-        "P0171  —  System too lean (bank 1)",
-    ]
+    assert "    P0300  —  Random/multiple cylinder misfire detected" in texts
+    assert "    P0171  —  System too lean (bank 1)" in texts
+    t = COPY["fa"]
+    assert t["dtc_category_header"].format(t["dtc_category"]["stored"], "03", 2) in texts
+    assert t["dtc_category_header"].format(t["dtc_category"]["pending"], "07", 0) in texts
+    # the drive cycle ECU does not support service 0A: said so, not "no codes"
+    unsupported = t["dtc_category_unavailable"].format(
+        t["dtc_category"]["permanent"], "0A", t["outcome"]["unsupported"]
+    )
+    assert unsupported in texts
+    assert window.mil_badge.text() == t["mil"]["on"].format(2)
 
 
 def test_connecting_does_not_block_the_window(window: MainWindow, backend: TestBackend) -> None:
@@ -264,7 +271,10 @@ def test_real_elm327_session_shows_vehicle_data_without_simulation_labels(
     assert speed.value is None
     assert speed.caption == COPY["en"]["pid_status"]["no_response"]
     assert any("ISO 15765-4 CAN (11 bit ID, 500 kbaud)" in text for text in _log_texts(window))
-    assert window.dtc_list.item(0).text().startswith("P0133")
+    assert "    P0133  —  O2 sensor circuit slow response (bank 1, sensor 1)" in (
+        window.diag_view.item_texts()
+    )
+    assert window.mil_badge.text() == COPY["en"]["mil"]["on"].format(2)
 
     window.connect_btn.click()  # disconnect
     settle(window)
@@ -298,9 +308,10 @@ def test_read_failures_are_never_shown_as_values_or_as_no_codes(
     rpm = window.gauges["rpm"].gauge
     assert rpm.value is None
     assert rpm.caption == COPY["en"]["pid_status"]["no_response"]
-    dtc_text = window.dtc_list.item(0).text()
+    dtc_text = window.diag_view.item_texts()[0]
     assert dtc_text != COPY["en"]["no_dtc"]
     assert "does not mean there are none" in dtc_text
+    assert window.mil_badge.text() == COPY["en"]["mil"]["unknown"]
 
 
 def test_lost_connection_disconnects_cleanly(window: MainWindow, backend: TestBackend) -> None:
@@ -318,7 +329,7 @@ def test_clear_codes_is_refused_and_explained_without_blocking(
 ) -> None:
     window.lang_combo.setCurrentIndex(1)
     _connect_simulation(window)
-    codes_before = window.dtc_list.count()
+    codes_before = window.diag_view.item_texts()
 
     window._clear_dtc()  # must return: the dialog is opened non-blocking
     qt_app.processEvents()
@@ -328,7 +339,7 @@ def test_clear_codes_is_refused_and_explained_without_blocking(
     assert modal.message_label.text() == COPY["en"]["safety_clear_dtc_msg"]
     window._refresh_dtc()
     settle(window)
-    assert window.dtc_list.count() == codes_before  # nothing was cleared
+    assert window.diag_view.item_texts() == codes_before  # nothing was cleared
     assert any("refused" in text for text in _log_texts(window))
     modal.accept()
 
@@ -412,3 +423,87 @@ def test_closing_the_window_stops_recording_and_closes_the_adapter(
     assert win.connected is False
     assert adapters[0].is_connected is False  # the queued disconnect ran during shutdown
     assert target.read_text(encoding="utf-8").startswith("timestamp_utc,simulated,")
+
+
+# --------------------------------------------------------------------------- #
+# M3 part A: MIL badge, DTC categories, freeze frame
+# --------------------------------------------------------------------------- #
+
+
+def test_mil_badge_follows_the_connection(window: MainWindow, backend: TestBackend) -> None:
+    t = COPY["en"]["mil"]
+    window.lang_combo.setCurrentIndex(1)
+    assert window.mil_badge.text() == t["disconnected"]
+
+    backend.adapter_factory = MockObdAdapter  # default scenario: MIL on, 3 codes
+    _connect_simulation(window)
+    assert window.mil_badge.text() == t["on"].format(3)
+    assert "evaporative_system" in window.mil_badge.toolTip()
+
+    window.connect_btn.click()
+    settle(window)
+    assert window.mil_badge.text() == t["disconnected"]
+
+
+def test_mil_unknown_when_pid_0101_is_unsupported(window: MainWindow, backend: TestBackend) -> None:
+    from dataclasses import replace
+
+    scenario = replace(MockScenario.default(), monitor_status_hex=None)
+    backend.adapter_factory = lambda: MockObdAdapter(scenario)
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+
+    assert window.mil_badge.text() == COPY["en"]["mil"]["unknown"]
+
+
+def test_category_filter_shows_one_category(window: MainWindow, backend: TestBackend) -> None:
+    backend.adapter_factory = MockObdAdapter
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    view = window.diag_view
+
+    view.filter_combo.setCurrentIndex(view.filter_combo.findData("pending"))
+
+    assert view.item_texts() == [
+        COPY["en"]["dtc_category_header"].format("Pending", "07", 1),
+        "    P0420  —  Catalyst system efficiency below threshold (bank 1)",
+    ]
+
+
+def test_freeze_frame_table_shows_values_and_dashes(
+    window: MainWindow, backend: TestBackend
+) -> None:
+    backend.adapter_factory = MockObdAdapter
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+    view = window.diag_view
+    assert view.freeze_status.text() == COPY["en"]["ff_not_read"]
+
+    view.freeze_btn.click()
+    settle(window)
+
+    assert view.freeze_status.text().startswith("Triggered by: P0301")
+    rows = {row[0]: row for row in view.freeze_rows()}
+    assert rows["Engine speed"][1:] == ["2410.0", "rpm", "Read"]
+    assert rows["Coolant temperature"][2] == "°C"
+    assert rows["Short term fuel trim (bank 1)"][1] == "-3.1"
+    assert rows["Throttle position"][1:] == ["—", "", "Not supported"]  # never a number
+
+
+def test_freeze_frame_not_stored_is_said_plainly(window: MainWindow, backend: TestBackend) -> None:
+    from dataclasses import replace
+
+    scenario = replace(MockScenario.default(), freeze_frame_trigger=None)
+    backend.adapter_factory = lambda: MockObdAdapter(scenario)
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+
+    window.diag_view.freeze_btn.click()
+    settle(window)
+
+    assert window.diag_view.freeze_status.text() == COPY["en"]["ff_none_stored"]
+    assert window.diag_view.freeze_rows() == []
+
+
+def test_freeze_frame_button_needs_a_connection(window: MainWindow) -> None:
+    assert window.diag_view.freeze_btn.isEnabled() is False

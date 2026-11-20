@@ -21,6 +21,9 @@ from iran_obd_tuner.ui.i18n import COPY, LANGUAGES, format_message
 UI_DIR = Path(i18n.__file__).parent
 WINDOW_SOURCE = (UI_DIR / "main_window.py").read_text(encoding="utf-8")
 MODAL_SOURCE = (UI_DIR / "safety_modal.py").read_text(encoding="utf-8")
+VIEW_SOURCES = "".join(
+    (UI_DIR / name).read_text(encoding="utf-8") for name in ("diagnostics_view.py",)
+)
 
 
 def _flatten(tree: Mapping[str, Any], prefix: str = "") -> Iterator[tuple[str, str]]:
@@ -77,7 +80,7 @@ def test_persian_strings_are_persian() -> None:
 
 
 def test_every_top_level_key_used_by_the_window_exists() -> None:
-    used = set(re.findall(r'\bt\["(\w+)"\]', WINDOW_SOURCE + MODAL_SOURCE))
+    used = set(re.findall(r'\bt\["(\w+)"\]', WINDOW_SOURCE + MODAL_SOURCE + VIEW_SOURCES))
     used |= set(re.findall(r'COPY\[self\.lang\]\["(\w+)"\]', WINDOW_SOURCE))
     # identification errors are stored as (key, detail) and rendered later with t[key]
     used |= set(re.findall(r'\("(ident_\w+)", ', WINDOW_SOURCE))
@@ -126,3 +129,19 @@ def test_format_message_substitutes_arguments(lang: str) -> None:
 
 def test_format_message_returns_unknown_keys_unchanged() -> None:
     assert format_message("en", "msg.does_not_exist") == "msg.does_not_exist"
+
+
+def test_nested_m3_tables_are_complete() -> None:
+    from iran_obd_tuner.core.dtc import DtcStatus
+    from iran_obd_tuner.diagnostics.models import PidStatus, ReadOutcome
+    from iran_obd_tuner.diagnostics.service import FREEZE_FRAME_PIDS
+
+    for lang in LANGUAGES:
+        t = COPY[lang]
+        assert set(t["dtc_category"]) == {s.value for s in DtcStatus}
+        assert {o.value for o in ReadOutcome} <= set(t["outcome"])
+        assert {"ok", *(s.value for s in PidStatus if s is not PidStatus.OK)} <= set(
+            t["pid_status"]
+        )
+        assert set(FREEZE_FRAME_PIDS) <= set(t["ff_params"])
+        assert set(t["mil"]) == {"disconnected", "on", "off", "unknown"}

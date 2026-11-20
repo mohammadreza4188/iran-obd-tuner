@@ -45,7 +45,11 @@
 | آداپتور شبیه‌ساز (ایستا + چرخه رانندگی زمان‌مند و قطعی) + تزریق خطای ارتباطی | `src/iran_obd_tuner/hardware/mock.py` |
 | فهرست درگاه‌های سریال بدون باز کردن هیچ درگاهی (pyserial اختیاری) | `src/iran_obd_tuner/hardware/serial_ports.py` |
 | **آداپتور ELM327 فقط‌خواندنی** (سریال/USB): راه‌اندازی، تشخیص پروتکل، PIDهای پشتیبانی‌شده، Live Data، کدهای خطا (سرویس ۰۳)، VIN (سرویس ۰۹)، فهرست سفید دستورها — **روی سخت‌افزار واقعی اعتبارسنجی نشده** | `src/iran_obd_tuner/hardware/elm327.py`, `elm327_protocol.py`, `transport.py` |
-| فرمول‌های decode پارامترها طبق SAE J1979 | `src/iran_obd_tuner/core/pids.py` |
+| فرمول‌های decode پارامترها طبق SAE J1979 (شامل اصلاح سوخت کوتاه‌مدت/بلندمدت `0106`/`0107`) | `src/iran_obd_tuner/core/pids.py` |
+| وضعیت چراغ چک (MIL)، تعداد کدهای تأییدشده و آمادگی مانیتورها (PID `0101`) — جدول بیت‌ها با J1979 اصلی **تأیید نشده** | `src/iran_obd_tuner/core/monitors.py` |
+| کدهای خطای ذخیره‌شده / در انتظار / دائمی (سرویس ۰۳ / ۰۷ / ۰A)؛ هر دسته وضعیت خودش را دارد و نبود یک دسته بقیه را خراب نمی‌کند | `src/iran_obd_tuner/diagnostics/service.py` |
+| Freeze Frame شماره ۰۰ (سرویس ۰۲): کد عامل و ۸ پارامتر؛ پارامتر ذخیره‌نشده با «—» | `src/iran_obd_tuner/diagnostics/service.py`, `ui/diagnostics_view.py` |
+| گزارش JSON نسخه ۲ (`schema_version: 2`) با `monitor_status`، `dtc_categories` و `freeze_frame` | `src/iran_obd_tuner/diagnostics/models.py` |
 | خواندن داده در thread پس‌زمینه (رابط کاربری هنگام جستجوی پروتکل قفل نمی‌شود) | `src/iran_obd_tuner/ui/worker.py` |
 | دیتابیس دانش JSON (زیرمجموعه عمومی کدهای خطا) | `src/iran_obd_tuner/database/` |
 | سیم‌کشی داشبورد در لایه app (تنظیمات، لاگ، رجیستری آداپتور) | `src/iran_obd_tuner/app/dashboard.py` + `app/gui_main.py` |
@@ -73,7 +77,8 @@
 | قابلیت | فاز | پیش‌نیاز |
 |---|---|---|
 | اعتبارسنجی آداپتور ELM327 روی سخت‌افزار و خودروی واقعی (پژو پارس TU5) | ۱ | آداپتور فیزیکی + خودرو |
-| کدهای pending/permanent (سرویس ۰۷/۰A)، freeze frame، تفکیک چند ECU با headerها | ۱ | — |
+| تفکیک چند ECU با headerها، freeze frameهای غیر از ۰۰، PID `0141` | ۱ | — |
+| تأیید جدول بیت‌های PID `0101` با متن SAE J1979 | ۱ | دسترسی به استاندارد |
 | CAN و UDS (SocketCAN/PCAN/Kvaser) | ۲ | `[can]`، `[bench]` + سخت‌افزار |
 | مطالعه و تکمیل دیتابیس دانش خودروهای ایرانی | ۳ | پژوهش مستند، نه حدس |
 | خواندن/ویرایش ROM در حالت Bench و تصحیح چک‌سام | ۴ | تأیید صریح + اعتبارسنجی خودرویی |

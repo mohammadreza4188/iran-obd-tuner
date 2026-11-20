@@ -31,6 +31,12 @@ from iran_obd_tuner.core.exceptions import (
     AdapterTimeoutError,
     ProtocolError,
     SafetyGuardError,
+    UnsupportedOperationError,
+)
+from iran_obd_tuner.core.monitors import (
+    MonitorStatus,
+    combine_monitor_status,
+    decode_monitor_status,
 )
 
 __all__ = [
@@ -38,11 +44,17 @@ __all__ = [
     "NoDataError",
     "ProtocolInfo",
     "check_command_allowed",
+    "check_negative_response",
     "clean_reply",
     "decode_dtc_pair",
     "parse_dpn",
+    "parse_dtc_reply",
+    "parse_freeze_frame_data",
+    "parse_freeze_frame_supported",
+    "parse_freeze_frame_trigger",
     "parse_messages",
     "parse_mode01_data",
+    "parse_monitor_status",
     "parse_stored_dtcs",
     "parse_supported_pids",
     "parse_vin",
@@ -63,10 +75,16 @@ ALLOWED_AT_COMMANDS: frozenset[str] = frozenset(
     {"ATZ", "ATE0", "ATL0", "ATH0", "ATTP0", "ATDPN", "ATDP", "ATI", "ATRV"}
 )
 
-#: OBD requests this driver may send: service 01 (current data), 03 (stored trouble codes)
-#: and 09 (vehicle information). Everything else - in particular service 04 (clear trouble
-#: codes), 08 (control of on-board systems) and any manufacturer service - is refused.
-_ALLOWED_OBD = re.compile(r"^(01[0-9A-F]{2}|03|09[0-9A-F]{2})$")
+#: OBD requests this driver may send, all of them reads:
+#:
+#: * ``01xx`` current data, ``09xx`` vehicle information;
+#: * ``02xx00`` freeze frame data - **frame 00 only**;
+#: * ``03`` stored, ``07`` pending and ``0A`` permanent trouble codes.
+#:
+#: Everything else is refused - in particular service 04 (clear trouble codes and freeze
+#: frames), 05/06 (test results, not needed), 08 (control of on-board systems) and every
+#: UDS or manufacturer service.
+_ALLOWED_OBD = re.compile(r"^(01[0-9A-F]{2}|02[0-9A-F]{2}00|03|07|0A|09[0-9A-F]{2})$")
 
 
 def check_command_allowed(command: str) -> str:
@@ -80,7 +98,7 @@ def check_command_allowed(command: str) -> str:
         return normalized
     raise SafetyGuardError(
         f"refusing to send {command!r} to the adapter: only read-only commands "
-        "(AT setup, OBD services 01, 03 and 09) are allowed in this build"
+        "(AT setup, OBD services 01, 02 frame 00, 03, 07, 0A and 09) are allowed in this build"
     )
 
 
@@ -288,29 +306,74 @@ def decode_dtc_pair(high: int, low: int) -> str:
     return f"{system}{(high >> 4) & 0x03}{high & 0x0F:X}{low:02X}"
 
 
-def parse_stored_dtcs(messages: Sequence[bytes], *, can: bool) -> tuple[str, ...]:
-    """Decode a service 03 reply into trouble code strings (duplicates removed).
+#: Negative response codes (ISO 14229 / ISO 15765 diagnostics) that mean "not supported".
+_NRC_NOT_SUPPORTED = frozenset({0x11, 0x12})
+#: requestOutOfRange: the ECU has no data for this request.
+_NRC_OUT_OF_RANGE = 0x31
+#: responsePending: the ECU needs more time; newer ELM327 versions wait for it themselves.
+_NRC_RESPONSE_PENDING = 0x78
 
-    On CAN the byte after ``43`` is the number of codes that follow; on the other protocols
-    each message carries three byte pairs padded with ``00 00``.
+
+def check_negative_response(messages: Sequence[bytes], service: int) -> None:
+    """Raise if the only answer to ``service`` is a negative response ``7F <svc> <NRC>``.
+
+    A negative response from one ECU is ignored when another ECU answered positively.
 
     Raises:
-        ProtocolError: If no ``43`` reply is present or a CAN count does not match.
+        UnsupportedOperationError: NRC ``11``/``12`` (service or sub-function not supported).
+        NoDataError: NRC ``31`` (request out of range: no such data).
+        ProtocolError: NRC ``78`` that reached us (the adapter did not wait) or any other.
     """
+    positive = service + 0x40
+    if any(message and message[0] == positive for message in messages):
+        return
+    for message in messages:
+        if len(message) >= 3 and message[0] == 0x7F and message[1] == service:
+            nrc = message[2]
+            where = f"service {service:02X}"
+            if nrc in _NRC_NOT_SUPPORTED:
+                raise UnsupportedOperationError(
+                    f"the vehicle does not support {where} (negative response {nrc:02X})"
+                )
+            if nrc == _NRC_OUT_OF_RANGE:
+                raise NoDataError(f"the vehicle has no data for {where} (request out of range)")
+            if nrc == _NRC_RESPONSE_PENDING:
+                raise ProtocolError(
+                    f"{where}: the ECU asked for more time (response pending) and the adapter "
+                    "did not wait for the answer"
+                )
+            raise ProtocolError(f"{where}: negative response {nrc:02X}")
+
+
+def parse_dtc_reply(messages: Sequence[bytes], service: int, *, can: bool) -> tuple[str, ...]:
+    """Decode a service 03, 07 or 0A reply into trouble code strings (duplicates removed).
+
+    The positive reply byte is ``service + 0x40`` (``43``, ``47``, ``4A``). On CAN the next
+    byte is the number of codes that follow (``47 00`` is a valid "no codes" answer); on the
+    other protocols each message carries three byte pairs padded with ``00 00``.
+
+    Raises:
+        UnsupportedOperationError / NoDataError / ProtocolError: See
+            :func:`check_negative_response`.
+        ProtocolError: If no positive reply is present or a CAN count does not match.
+    """
+    check_negative_response(messages, service)
+    positive = service + 0x40
+    label = f"service {service:02X}"
     codes: list[str] = []
     found = False
     for message in messages:
-        if not message or message[0] != 0x43:
+        if not message or message[0] != positive:
             continue
         found = True
         if can:
             if len(message) < 2:
-                raise ProtocolError(f"truncated service 03 reply: {message.hex(' ')}")
+                raise ProtocolError(f"truncated {label} reply: {message.hex(' ')}")
             count = message[1]
             payload = message[2:]
             if len(payload) < count * 2:
                 raise ProtocolError(
-                    f"service 03 reply announces {count} code(s) but carries "
+                    f"{label} reply announces {count} code(s) but carries "
                     f"{len(payload) // 2}: {message.hex(' ').upper()}"
                 )
             pairs = [payload[i : i + 2] for i in range(0, count * 2, 2)]
@@ -323,8 +386,92 @@ def parse_stored_dtcs(messages: Sequence[bytes], *, can: bool) -> tuple[str, ...
             if code not in codes:
                 codes.append(code)
     if not found:
-        raise ProtocolError("no service 03 reply (43 ...) in the adapter output")
+        raise ProtocolError(f"no {label} reply ({positive:02X} ...) in the adapter output")
     return tuple(codes)
+
+
+def parse_stored_dtcs(messages: Sequence[bytes], *, can: bool) -> tuple[str, ...]:
+    """Decode a service 03 reply (kept for callers of the M2 API)."""
+    return parse_dtc_reply(messages, 0x03, can=can)
+
+
+# --------------------------------------------------------------------------- #
+# PID 0101 and service 02 (freeze frame 00)
+# --------------------------------------------------------------------------- #
+
+
+def parse_monitor_status(messages: Sequence[bytes]) -> MonitorStatus:
+    """Decode ``41 01 A B C D`` replies; several ECUs are combined (MIL any, count sum).
+
+    Raises:
+        ProtocolError: If no well-formed ``41 01`` reply is present.
+    """
+    statuses = [
+        decode_monitor_status(message[2:6])
+        for message in messages
+        if len(message) >= 6 and message[0] == 0x41 and message[1] == 0x01
+    ]
+    if not statuses:
+        raise ProtocolError("no reply to 0101 (monitor status) in the adapter output")
+    return combine_monitor_status(statuses)
+
+
+def _freeze_frame_replies(messages: Sequence[bytes], pid: int) -> list[bytes]:
+    check_negative_response(messages, 0x02)
+    replies = [m for m in messages if len(m) >= 3 and m[0] == 0x42 and m[1] == pid]
+    if not replies:
+        raise ProtocolError(f"no reply to 02{pid:02X}00 among {len(messages)} message(s)")
+    for reply in replies:
+        if reply[2] != 0x00:
+            raise ProtocolError(
+                f"reply to 02{pid:02X}00 is for frame {reply[2]:02X}, not frame 00: "
+                f"{reply.hex(' ').upper()}"
+            )
+    return replies
+
+
+def parse_freeze_frame_supported(messages: Sequence[bytes], base: int) -> set[int]:
+    """Decode a freeze-frame supported-PIDs bitmask (``42 00 00 b1 b2 b3 b4``)."""
+    supported: set[int] = set()
+    for reply in _freeze_frame_replies(messages, base):
+        if len(reply) < 7:
+            raise ProtocolError(f"truncated freeze frame bitmask: {reply.hex(' ').upper()}")
+        mask = int.from_bytes(reply[3:7], "big")
+        for bit in range(32):
+            if mask & (1 << (31 - bit)):
+                supported.add(base + bit + 1)
+    return supported
+
+
+def parse_freeze_frame_trigger(messages: Sequence[bytes]) -> str | None:
+    """Decode ``42 02 00 HH LL``: the DTC that stored freeze frame 00.
+
+    Returns:
+        The trouble code, or ``None`` for ``00 00`` - no freeze frame is stored, and every
+        other service 02 value is then meaningless (SAE J1979).
+    """
+    reply = _freeze_frame_replies(messages, 0x02)[0]
+    if len(reply) < 5:
+        raise ProtocolError(f"truncated freeze frame trigger reply: {reply.hex(' ').upper()}")
+    if reply[3] == 0 and reply[4] == 0:
+        return None
+    return decode_dtc_pair(reply[3], reply[4])
+
+
+def parse_freeze_frame_data(messages: Sequence[bytes], pid: int, data_bytes: int) -> bytes:
+    """Return the data bytes of the first ``42 <pid> 00 <data>`` reply.
+
+    Raises:
+        ProtocolError: If no reply matches, the frame is not 00, or the data is too short.
+    """
+    reply = _freeze_frame_replies(messages, pid)[0]
+    data = reply[3:]
+    if len(data) < data_bytes:
+        raise ProtocolError(
+            f"reply to 02{pid:02X}00 has {len(data)} data byte(s), {data_bytes} expected: "
+            f"{reply.hex(' ').upper()}"
+        )
+    return data[:data_bytes]
 
 
 def parse_vin(messages: Sequence[bytes]) -> str:

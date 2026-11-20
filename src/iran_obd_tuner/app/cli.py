@@ -36,7 +36,7 @@ from iran_obd_tuner.core.exceptions import (
 )
 from iran_obd_tuner.core.logging import configure_logging, get_logger, normalize_log_level
 from iran_obd_tuner.core.pids import is_valid_pid, normalize_pid
-from iran_obd_tuner.diagnostics.models import DiagnosticReport
+from iran_obd_tuner.diagnostics.models import DiagnosticReport, ReadOutcome, TroubleCode
 from iran_obd_tuner.hardware.registry import declared_adapters, implemented_adapters
 
 __all__ = ["build_parser", "main"]
@@ -154,6 +154,16 @@ def _cmd_config(settings: AppSettings) -> int:
     return EXIT_OK
 
 
+def _render_codes(codes: Sequence[TroubleCode]) -> list[str]:
+    lines = []
+    for trouble_code in codes:
+        known = "" if trouble_code.is_known else " [no description]"
+        lines.append(
+            f"  {trouble_code.code} [{trouble_code.scope}]{known} {trouble_code.display_text}"
+        )
+    return lines
+
+
 def _render_report(report: DiagnosticReport) -> tuple[str, ...]:
     """Render a report as plain text lines, for terminals, logs and issue reports."""
     vehicle = report.vehicle
@@ -170,14 +180,52 @@ def _render_report(report: DiagnosticReport) -> tuple[str, ...]:
             f"{measurement.value:>10.2f} {measurement.unit}"
         )
 
-    lines.append(f"trouble codes ({len(report.trouble_codes)}):")
-    if not report.trouble_codes:
-        lines.append("  none stored")
-    for trouble_code in report.trouble_codes:
-        known = "" if trouble_code.is_known else " [no description]"
-        lines.append(
-            f"  {trouble_code.code} [{trouble_code.scope}]{known} {trouble_code.display_text}"
-        )
+    monitor = report.monitor_status
+    if monitor is not None:
+        if monitor.status is not None:
+            state = monitor.status
+            mil = "ON" if state.mil_on else "off"
+            incomplete = ", ".join(state.incomplete_monitors) or "none"
+            lines.append(
+                f"MIL (check engine): {mil}; confirmed codes: {state.confirmed_dtc_count}; "
+                f"ignition: {state.ignition}; incomplete monitors: {incomplete}"
+            )
+            if state.ecu_count > 1:
+                lines.append(f"  ({state.ecu_count} ECUs answered; readiness from the first)")
+        else:
+            lines.append(f"MIL (check engine): unknown ({monitor.outcome}: {monitor.detail})")
+
+    categories = report.dtc_categories
+    if not categories:
+        lines.append(f"trouble codes ({len(report.trouble_codes)}):")
+        if not report.trouble_codes:
+            lines.append("  none stored")
+        lines.extend(_render_codes(report.trouble_codes))
+    for category in categories:
+        title = f"{category.status} trouble codes (service {category.status.service})"
+        if category.outcome is not ReadOutcome.OK:
+            lines.append(f"{title}: NOT AVAILABLE - {category.outcome}: {category.detail}")
+            continue
+        lines.append(f"{title} ({len(category.codes)}):")
+        if not category.codes:
+            lines.append("  none reported")
+        lines.extend(_render_codes(category.codes))
+
+    frame = report.freeze_frame
+    if frame is not None:
+        if frame.outcome is not ReadOutcome.OK:
+            lines.append(f"freeze frame: NOT AVAILABLE - {frame.outcome}: {frame.detail}")
+        elif not frame.present:
+            lines.append("freeze frame: none stored")
+        else:
+            trigger = frame.trigger.code if frame.trigger is not None else "unknown"
+            lines.append(f"freeze frame 00 (trigger {trigger}):")
+            for reading in frame.readings:
+                if reading.measurement is not None:
+                    m = reading.measurement
+                    lines.append(f"  {m.pid}  {m.name:<32} {m.value:>10.2f} {m.unit}")
+                else:
+                    lines.append(f"  {reading.pid}  {'-':<32} {'n/a':>10} ({reading.status})")
 
     if report.skipped_pids:
         lines.append(f"parameters not answered: {', '.join(report.skipped_pids)}")

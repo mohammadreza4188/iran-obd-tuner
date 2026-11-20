@@ -119,6 +119,22 @@ PID_CATALOG: tuple[PidSpec, ...] = (
         lambda d: d[0] - 40,
     ),
     PidSpec(
+        "0106",
+        "Short term fuel trim - bank 1",
+        Unit.PERCENT,
+        "Fuel correction applied now; negative = leaning (too rich), positive = enriching.",
+        1,
+        lambda d: d[0] * 100 / 128 - 100,
+    ),
+    PidSpec(
+        "0107",
+        "Long term fuel trim - bank 1",
+        Unit.PERCENT,
+        "Learned fuel correction; negative = leaning (too rich), positive = enriching.",
+        1,
+        lambda d: d[0] * 100 / 128 - 100,
+    ),
+    PidSpec(
         "010B",
         "Intake manifold absolute pressure",
         Unit.KILOPASCAL,

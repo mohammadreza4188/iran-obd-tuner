@@ -70,6 +70,9 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `hardware/elm327_protocol.py` | تجزیه خالص پاسخ‌های ELM327 + فهرست سفید دستورها | پیاده‌شده (تست با نمونه‌های datasheet) |
 | `hardware/elm327.py` | `Elm327Adapter` فقط‌خواندنی | پیاده‌شده، **روی سخت‌افزار اعتبارسنجی نشده** |
 | `ui/worker.py` | `BackgroundRunner`: یک thread پس‌زمینه، اجرای ترتیبی کارهای آداپتور | پیاده‌شده |
+| `core/monitors.py` | decode PID `0101`: MIL، تعداد DTC، نوع احتراق، آمادگی مانیتورها | پیاده‌شده (جدول بیت‌ها با J1979 اصلی تأیید نشده) |
+| `core/dtc.py` → `DtcStatus` | دسته کد خطا: stored (۰۳) / pending (۰۷) / permanent (۰A) | پیاده‌شده |
+| `ui/diagnostics_view.py` | تب کدهای خطا: دسته‌ها، فیلتر، جدول Freeze Frame | پیاده‌شده |
 | `diagnostics/service.py` | `DiagnosticService.collect_report()` + تفسیر مشترک کد خطا و شناسه خودرو | پیاده‌شده |
 | `diagnostics/live_data.py` | `LiveDataSession`, `LiveSnapshot`, `PidReading`, `PidStatus` | پیاده‌شده |
 | `diagnostics/recorder.py` | `CsvRecorder` (UTC، واحد، ستون `simulated`) | پیاده‌شده |
@@ -95,9 +98,16 @@ CLI/UI
             ├─ adapter.read_vin()
             ├─ adapter.read_supported_pids()
             ├─ adapter.read_measurements(pids)   → MeasurementBatch(+ skipped_pids)
-            ├─ adapter.read_diagnostic_trouble_codes()   → کدهای خام
-            └─ knowledge.describe_dtc(code)  → TroubleCode (+ توضیح، در صورت وجود)
-                 → DiagnosticReport.read_only = True
+            ├─ read_monitor_status_result(adapter)   → MonitorStatusResult (PID 0101)
+            ├─ read_dtc_categories(adapter, knowledge)  → ۳ × DtcCategoryResult (۰۳ / ۰۷ / ۰A)
+            ├─ read_freeze_frame_snapshot(adapter, ...)  → FreezeFrameSnapshot (۰۲، frame ۰۰)
+            └─ knowledge.describe_dtc(code)  → TroubleCode (+ توضیح و status)
+                 → DiagnosticReport (schema_version = 2, read_only = True)
+
+هر بخش توسعه‌یافته (۰۱۰۱، هر دسته DTC، freeze frame) **مستقل** خوانده می‌شود و `ReadOutcome`
+خودش را دارد (`ok` / `unsupported` / `no_response` / `error`). پشتیبانی‌نشده یا بی‌پاسخ بودن یک
+بخش، بقیه گزارش را خراب نمی‌کند و هرگز به‌صورت «کدی نیست» یا یک عدد گزارش نمی‌شود. فقط قطع
+اتصال (`AdapterConnectionError`) کل گزارش را متوقف می‌کند.
 ```
 
 جریان داشبورد (نشست پایدار، روی همان قرارداد):
@@ -241,6 +251,8 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۱۷ | (Milestone 2) فهرست سفید دستور در نقطه واحد ارسال + `AT TP 0` به‌جای `AT SP 0` | دفاع چندلایه: حتی باگ در کد بالاتر نمی‌تواند سرویس ۰۴ یا UDS بفرستد؛ EEPROM آداپتور نوشته نمی‌شود | اتکا فقط به گارد `core.safety` |
 | ۱۸ | (Milestone 2) بدون جستجوی خودکار درگاه؛ قطع اتصال اگر دستگاه به `ATZ` به‌عنوان ELM327 پاسخ ندهد | ارسال فرمان به دستگاه ناشناخته روی درگاه دیگر خطرناک است | امتحان همه درگاه‌ها |
 | ۱۹ | (Milestone 2) همه I/O آداپتور روی یک thread پس‌زمینه، به ترتیب؛ نتیجه‌های کهنه پس از قطع دور ریخته می‌شوند | جستجوی پروتکل تا ده‌ها ثانیه طول می‌کشد؛ session ایمن برای چند thread نیست | thread pool |
+| ۲۰ | (Milestone 3) خواندن مستقل هر بخش با `ReadOutcome`؛ گزارش JSON نسخه ۲ | پشتیبانی جزئی ECUها (مثلاً بدون سرویس ۰A) رایج است؛ نبود یک بخش نباید کل تشخیص را خراب کند | شکست کل گزارش با اولین خطا |
+| ۲۱ | (Milestone 3) فهرست سفید فقط `02xx00` (frame ۰۰)، `07` و `0A` را اضافه می‌کند | همه خواندنی‌اند؛ ۰۴، ۰۸ و UDS همچنان رد می‌شوند | باز کردن کل سرویس ۰۲ |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
@@ -264,6 +276,11 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
    استفاده می‌شود و bitmaskها با هم ترکیب می‌شوند. پاسخ چندفریمی درهم رد می‌شود.
 8. **ELM327 روی سخت‌افزار واقعی اعتبارسنجی نشده است.** timeoutهای `RESET_TIMEOUT_S` و `SEARCH_TIMEOUT_S`
    برآورد محافظه‌کارانه‌اند و رفتار کلون‌های ارزان ممکن است با datasheet فرق کند.
+9. **جدول بیت‌های PID `0101`** از خلاصه‌های عمومی J1979 آمده و با متن استاندارد تأیید نشده است؛
+   بیت ۴ بایت‌های C/D بین نسخه‌های J1979 فرق دارد و با نام خنثی `bit4_ac_or_gpf` گزارش می‌شود.
+   ترکیب پاسخ چند ECU (MIL = OR، تعداد = جمع، مانیتورها از اولی) پیشنهاد محافظه‌کارانه است.
+10. **پاسخ `7F xx 78` (Response Pending)** اگر از آداپتور عبور کند خطا گزارش می‌شود؛ نسخه‌های قدیمی
+    ELM327 (مثل v1.3a) خودشان منتظر پاسخ نهایی نمی‌مانند.
 
 ### تصمیم‌هایی که نیازمند تأیید تیم است
 

@@ -29,14 +29,16 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from iran_obd_tuner.core.dtc import parse_dtc_code
+from iran_obd_tuner.core.dtc import DtcStatus, parse_dtc_code
 from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
     AdapterTimeoutError,
     ProtocolError,
+    UnsupportedOperationError,
     UnsupportedPidError,
 )
 from iran_obd_tuner.core.models import Measurement
+from iran_obd_tuner.core.monitors import MonitorStatus, decode_monitor_status
 from iran_obd_tuner.core.pids import describe_pid, normalize_pid
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
 from iran_obd_tuner.hardware.base import AdapterInfo, AdapterKind, ObdAdapter
@@ -130,6 +132,13 @@ class MockScenario:
         latency_s: Artificial delay before every response, to simulate a slow adapter.
         notes: Free-form note carried into reports.
         motion: How values evolve over time; :attr:`MotionProfile.STATIC` by default.
+        pending_codes: Pending trouble codes (service 07); ``None`` = service unsupported.
+        permanent_codes: Permanent trouble codes (service 0A); ``None`` = unsupported.
+        monitor_status_hex: The four data bytes of PID 0101 as hex, e.g. ``"83076504"``;
+            ``None`` = PID 0101 unsupported. Decoded with the real decoder.
+        supports_freeze_frame: Whether service 02 is answered at all.
+        freeze_frame_trigger: DTC that stored freeze frame 00; ``None`` = no frame stored.
+        freeze_frame: Simulated freeze frame 00 values (only these PIDs are "supported").
     """
 
     name: str = "simulated-generic-can"
@@ -141,19 +150,33 @@ class MockScenario:
     latency_s: float = 0.0
     notes: str = "All values are simulated; they do not come from a vehicle."
     motion: MotionProfile = MotionProfile.STATIC
+    pending_codes: tuple[str, ...] | None = ()
+    permanent_codes: tuple[str, ...] | None = ()
+    monitor_status_hex: str | None = None
+    supports_freeze_frame: bool = True
+    freeze_frame_trigger: str | None = None
+    freeze_frame: tuple[SimulatedReading, ...] = ()
 
     def __post_init__(self) -> None:
         if self.latency_s < 0:
             raise ValueError("latency_s must not be negative")
-        normalized_codes = []
-        for code in self.trouble_codes:
-            normalized_codes.append(parse_dtc_code(code).code)
-        object.__setattr__(self, "trouble_codes", tuple(normalized_codes))
-        seen: set[str] = set()
-        for reading in self.readings:
-            if reading.pid in seen:
-                raise ValueError(f"duplicate simulated reading for PID {reading.pid}")
-            seen.add(reading.pid)
+        object.__setattr__(self, "trouble_codes", _normalize_codes(self.trouble_codes))
+        if self.pending_codes is not None:
+            object.__setattr__(self, "pending_codes", _normalize_codes(self.pending_codes))
+        if self.permanent_codes is not None:
+            object.__setattr__(self, "permanent_codes", _normalize_codes(self.permanent_codes))
+        if self.freeze_frame_trigger is not None:
+            object.__setattr__(
+                self, "freeze_frame_trigger", parse_dtc_code(self.freeze_frame_trigger).code
+            )
+        if self.monitor_status_hex is not None:
+            decode_monitor_status(bytes.fromhex(self.monitor_status_hex))  # validates
+        for group in (self.readings, self.freeze_frame):
+            seen: set[str] = set()
+            for reading in group:
+                if reading.pid in seen:
+                    raise ValueError(f"duplicate simulated reading for PID {reading.pid}")
+                seen.add(reading.pid)
 
     @property
     def supported_pids(self) -> tuple[str, ...]:
@@ -191,6 +214,21 @@ class MockScenario:
                 SimulatedReading("0142", 14.1),
             ),
             trouble_codes=("P0301", "P0135", "P0171"),
+            pending_codes=("P0420",),
+            permanent_codes=("P0301",),
+            # MIL on, 3 confirmed codes; spark ignition; misfire/fuel/components available and
+            # complete; catalyst, evap, O2 sensor and heater available; evap not complete.
+            monitor_status_hex="83076504",
+            freeze_frame_trigger="P0301",
+            freeze_frame=(
+                SimulatedReading("0104", 45.1),
+                SimulatedReading("0105", 88.0),
+                SimulatedReading("0106", -3.1),
+                SimulatedReading("0107", 4.7),
+                SimulatedReading("010C", 2410.0),
+                SimulatedReading("010D", 64.0),
+                SimulatedReading("010F", 31.0),
+            ),
         )
 
     @classmethod
@@ -209,6 +247,17 @@ class MockScenario:
             name="simulated-drive-cycle",
             readings=readings,
             trouble_codes=("P0300", "P0171"),
+            pending_codes=(),
+            permanent_codes=None,  # demonstrates an ECU without service 0A
+            monitor_status_hex="82076504",
+            freeze_frame_trigger="P0300",
+            freeze_frame=(
+                SimulatedReading("0104", 72.5),
+                SimulatedReading("0105", 91.0),
+                SimulatedReading("010C", 3150.0),
+                SimulatedReading("010D", 87.0),
+                SimulatedReading("0111", 64.3),
+            ),
             notes=(
                 "All values are simulated (time-varying drive cycle); they do not come from "
                 "a vehicle."
@@ -235,6 +284,11 @@ class MockScenario:
             payload["readings"] = _parse_readings(payload["readings"])
         if "trouble_codes" in payload:
             payload["trouble_codes"] = tuple(str(code) for code in payload["trouble_codes"])
+        for key in ("pending_codes", "permanent_codes"):
+            if payload.get(key) is not None:
+                payload[key] = tuple(str(code) for code in payload[key])
+        if "freeze_frame" in payload:
+            payload["freeze_frame"] = _parse_readings(payload["freeze_frame"])
         if "failure" in payload:
             payload["failure"] = FailureMode(str(payload["failure"]))
         if "motion" in payload:
@@ -266,11 +320,23 @@ class MockScenario:
             "latency_s": self.latency_s,
             "notes": self.notes,
             "motion": str(self.motion),
+            "pending_codes": None if self.pending_codes is None else list(self.pending_codes),
+            "permanent_codes": (
+                None if self.permanent_codes is None else list(self.permanent_codes)
+            ),
+            "monitor_status_hex": self.monitor_status_hex,
+            "supports_freeze_frame": self.supports_freeze_frame,
+            "freeze_frame_trigger": self.freeze_frame_trigger,
+            "freeze_frame": [{"pid": r.pid, "value": r.value} for r in self.freeze_frame],
         }
 
     def with_failure(self, failure: FailureMode) -> MockScenario:
         """Return a copy of this scenario injecting ``failure``."""
         return replace(self, failure=failure)
+
+
+def _normalize_codes(codes: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(parse_dtc_code(code).code for code in codes)
 
 
 def _parse_readings(raw: Any) -> tuple[SimulatedReading, ...]:
@@ -390,3 +456,58 @@ class MockObdAdapter(ObdAdapter):
         self._guard_read()
         self._guard_decoding()
         return self._scenario.trouble_codes
+
+    def read_trouble_codes(self, status: DtcStatus) -> tuple[str, ...]:
+        if status is DtcStatus.STORED:
+            return self.read_diagnostic_trouble_codes()
+        self._guard_read()
+        codes = (
+            self._scenario.pending_codes
+            if status is DtcStatus.PENDING
+            else self._scenario.permanent_codes
+        )
+        if codes is None:
+            raise UnsupportedOperationError(
+                f"mock: simulated vehicle does not support service {status.service}"
+            )
+        self._guard_decoding()
+        return codes
+
+    def read_monitor_status(self) -> MonitorStatus:
+        self._guard_read()
+        if self._scenario.monitor_status_hex is None:
+            raise UnsupportedPidError("PID 0101 is not supported by the simulated vehicle")
+        self._guard_decoding()
+        return decode_monitor_status(bytes.fromhex(self._scenario.monitor_status_hex))
+
+    def read_freeze_frame_supported_pids(self) -> tuple[str, ...]:
+        self._guard_read()
+        self._require_freeze_frame_service()
+        self._guard_decoding()
+        return tuple(reading.pid for reading in self._scenario.freeze_frame)
+
+    def read_freeze_frame_trigger(self) -> str | None:
+        self._guard_read()
+        self._require_freeze_frame_service()
+        self._guard_decoding()
+        return self._scenario.freeze_frame_trigger
+
+    def read_freeze_frame_value(self, pid: str) -> Measurement:
+        self._guard_read()
+        self._require_freeze_frame_service()
+        normalized = normalize_pid(pid)
+        for reading in self._scenario.freeze_frame:
+            if reading.pid == normalized:
+                self._guard_decoding()
+                spec = describe_pid(normalized)
+                assert spec is not None  # guarded by SimulatedReading validation
+                return Measurement(
+                    pid=spec.pid, name=spec.name, value=reading.value, unit=spec.unit
+                )
+        raise UnsupportedPidError(f"PID {normalized} is not stored in the simulated freeze frame")
+
+    def _require_freeze_frame_service(self) -> None:
+        if not self._scenario.supports_freeze_frame:
+            raise UnsupportedOperationError(
+                "mock: simulated vehicle does not support service 02 (freeze frame)"
+            )

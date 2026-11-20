@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-__all__ = ["DtcCodeStructure", "DtcScope", "DtcSystem", "parse_dtc_code"]
+__all__ = ["DtcCodeStructure", "DtcScope", "DtcStatus", "DtcSystem", "parse_dtc_code"]
 
 DTC_PATTERN = re.compile(r"^[PCBU][0-3][0-9A-F]{3}$")
 
@@ -24,6 +24,22 @@ class DtcSystem(StrEnum):
     CHASSIS = "C"
     BODY = "B"
     NETWORK = "U"
+
+
+class DtcStatus(StrEnum):
+    """Which OBD-II service reported a trouble code (SAE J1979 services 03, 07 and 0A)."""
+
+    #: Confirmed codes (service 03).
+    STORED = "stored"
+    #: Detected during the current or last driving cycle, not yet confirmed (service 07).
+    PENDING = "pending"
+    #: Codes that cannot be cleared by a scan tool, only by the ECU itself (service 0A).
+    PERMANENT = "permanent"
+
+    @property
+    def service(self) -> str:
+        """The OBD-II request byte, e.g. ``"03"``."""
+        return {"stored": "03", "pending": "07", "permanent": "0A"}[self.value]
 
 
 class DtcScope(StrEnum):

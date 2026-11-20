@@ -23,7 +23,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 
 from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
@@ -33,48 +32,28 @@ from iran_obd_tuner.core.exceptions import (
     UnsupportedPidError,
 )
 from iran_obd_tuner.core.logging import get_logger
-from iran_obd_tuner.core.models import Measurement, VehicleInfo, utc_now
+from iran_obd_tuner.core.models import VehicleInfo, utc_now
 from iran_obd_tuner.core.pids import normalize_pid
 from iran_obd_tuner.database.repository import KnowledgeRepository
-from iran_obd_tuner.diagnostics.models import TroubleCode
-from iran_obd_tuner.diagnostics.service import interpret_trouble_code, vehicle_info_for
+from iran_obd_tuner.diagnostics.models import (
+    DtcCategoryResult,
+    FreezeFrameSnapshot,
+    MonitorStatusResult,
+    PidReading,
+    PidStatus,
+    TroubleCode,
+)
+from iran_obd_tuner.diagnostics.service import (
+    FREEZE_FRAME_PIDS,
+    interpret_trouble_code,
+    read_dtc_categories,
+    read_freeze_frame_snapshot,
+    read_monitor_status_result,
+    vehicle_info_for,
+)
 from iran_obd_tuner.hardware.base import AdapterInfo, ObdAdapter
 
 __all__ = ["LiveDataSession", "LiveSnapshot", "PidReading", "PidStatus"]
-
-
-class PidStatus(StrEnum):
-    """Outcome of reading one parameter."""
-
-    #: A value was read and decoded.
-    OK = "ok"
-    #: The adapter or vehicle does not support the parameter.
-    UNSUPPORTED = "unsupported"
-    #: The vehicle did not answer in time.
-    NO_RESPONSE = "no_response"
-    #: An answer arrived but could not be decoded.
-    MALFORMED = "malformed"
-
-
-@dataclass(frozen=True, slots=True)
-class PidReading:
-    """Result of reading one parameter in a poll.
-
-    Attributes:
-        pid: Requested parameter identifier in request form.
-        status: Outcome of the read.
-        measurement: The decoded measurement; only present when ``status`` is ``OK``.
-        detail: Error message of a failed read, for logs and tooltips.
-    """
-
-    pid: str
-    status: PidStatus
-    measurement: Measurement | None = None
-    detail: str | None = None
-
-    def __post_init__(self) -> None:
-        if (self.status is PidStatus.OK) != (self.measurement is not None):
-            raise ValueError("a measurement is present exactly when the status is OK")
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +180,23 @@ class LiveDataSession:
             AdapterError: If the request fails.
         """
         return vehicle_info_for(self._adapter, self._adapter.read_vin())
+
+    def read_trouble_code_categories(self) -> tuple[DtcCategoryResult, ...]:
+        """Read stored, pending and permanent codes; each category reports its own outcome.
+
+        Raises:
+            AdapterConnectionError: Only when the connection is lost (a category that is
+                unsupported or unanswered is reported, not raised).
+        """
+        return read_dtc_categories(self._adapter, self._knowledge)
+
+    def read_monitor_status(self) -> MonitorStatusResult:
+        """Read PID 0101 (MIL, confirmed DTC count, readiness monitors)."""
+        return read_monitor_status_result(self._adapter)
+
+    def read_freeze_frame(self) -> FreezeFrameSnapshot:
+        """Read freeze frame 00: trigger DTC and the standard frozen parameters."""
+        return read_freeze_frame_snapshot(self._adapter, self._knowledge, FREEZE_FRAME_PIDS)
 
     def request_clear_trouble_codes(self) -> None:
         """Forward a "clear trouble codes" request to the adapter's safety gate.

@@ -17,18 +17,24 @@ Session set-up (``connect``):
 6. ``AT DPN`` - which protocol was found (reported as :attr:`active_protocol`).
 
 Safety: every command passes :func:`~iran_obd_tuner.hardware.elm327_protocol.
-check_command_allowed` before it is written, so only AT set-up commands and OBD services
-01, 03 and 09 can ever be sent. Clearing trouble codes (service 04) is refused by the base
-class safety gate and, independently, could not pass the whitelist.
+check_command_allowed` before it is written, so only AT set-up commands and the read-only OBD
+services 01, 02 (frame 00), 03, 07, 0A and 09 can ever be sent. Clearing trouble codes
+(service 04) is refused by the base class safety gate and, independently, could not pass
+the whitelist.
 
 Not implemented: automatic port probing (the user must choose the port), header parsing
-to tell several ECUs apart, pending/permanent trouble codes (services 07/0A), freeze frames.
+to tell several ECUs apart, freeze frames other than frame 00.
+
+Reads after set-up: 01 (current data, incl. PID 0101 monitor status), 02 (freeze frame 00:
+supported PIDs, trigger DTC, values), 03/07/0A (stored/pending/permanent trouble codes) and
+09 (VIN).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
+from iran_obd_tuner.core.dtc import DtcStatus
 from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
     ProtocolError,
@@ -36,6 +42,7 @@ from iran_obd_tuner.core.exceptions import (
 )
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import Measurement
+from iran_obd_tuner.core.monitors import MonitorStatus
 from iran_obd_tuner.core.pids import describe_pid, normalize_pid
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, SafetyPolicy
 from iran_obd_tuner.hardware import elm327_protocol as proto
@@ -49,7 +56,9 @@ ELM327_NAME = "elm327"
 ELM327_INFO = AdapterInfo(
     name=ELM327_NAME,
     kind=AdapterKind.SERIAL,
-    description="ELM327 compatible serial/USB adapter (read-only: services 01, 03, 09).",
+    description=(
+        "ELM327 compatible serial/USB adapter (read-only: services 01, 02, 03, 07, 0A, 09)."
+    ),
     implemented=True,
     protocols=tuple(proto.PROTOCOL_NAMES[n] for n in "123456789"),
     hardware_required=True,
@@ -100,6 +109,7 @@ class Elm327Adapter(ObdAdapter):
         self._transport: Transport | None = None
         self._protocol: proto.ProtocolInfo | None = None
         self._supported: frozenset[str] = frozenset()
+        self._freeze_frame_supported: frozenset[str] | None = None
         self._version: str | None = None
         self._log = get_logger("hardware.elm327")
 
@@ -229,14 +239,65 @@ class Elm327Adapter(ObdAdapter):
             raise UnsupportedPidError(f"PID {normalized} has no decoding definition")
         if normalized not in self._supported:
             raise UnsupportedPidError(f"PID {normalized} is not supported by the vehicle")
-        lines = self._command(normalized)
-        data = proto.parse_mode01_data(
-            proto.parse_messages(lines), int(normalized[2:], 16), spec.data_bytes
-        )
+        messages = proto.parse_messages(self._command(normalized))
+        proto.check_negative_response(messages, 0x01)
+        data = proto.parse_mode01_data(messages, int(normalized[2:], 16), spec.data_bytes)
         return Measurement(pid=spec.pid, name=spec.name, value=spec.decode(data), unit=spec.unit)
 
     def read_diagnostic_trouble_codes(self) -> tuple[str, ...]:
+        return self.read_trouble_codes(DtcStatus.STORED)
+
+    def read_trouble_codes(self, status: DtcStatus) -> tuple[str, ...]:
         self._require_connected()
-        lines = self._command("03")
-        can = self._protocol.is_can if self._protocol is not None else False
-        return proto.parse_stored_dtcs(proto.parse_messages(lines), can=can)
+        messages = proto.parse_messages(self._command(status.service))
+        return proto.parse_dtc_reply(messages, int(status.service, 16), can=self._is_can)
+
+    def read_monitor_status(self) -> MonitorStatus:
+        self._require_connected()
+        if "0101" not in self._supported:
+            raise UnsupportedPidError("PID 0101 (monitor status) is not supported by the vehicle")
+        messages = proto.parse_messages(self._command("0101"))
+        proto.check_negative_response(messages, 0x01)
+        return proto.parse_monitor_status(messages)
+
+    # ------------------------------------------------------------------ freeze frame 00
+    def read_freeze_frame_supported_pids(self) -> tuple[str, ...]:
+        self._require_connected()
+        if self._freeze_frame_supported is None:
+            supported: set[int] = set()
+            base = 0x00
+            while True:
+                try:
+                    lines = self._command(f"02{base:02X}00")
+                except proto.NoDataError:
+                    if base == 0x00:
+                        raise
+                    break
+                supported |= proto.parse_freeze_frame_supported(proto.parse_messages(lines), base)
+                next_base = base + 0x20
+                if next_base not in supported or next_base > 0xE0:
+                    break
+                base = next_base
+            self._freeze_frame_supported = frozenset(f"01{pid:02X}" for pid in supported)
+        return tuple(sorted(self._freeze_frame_supported))
+
+    def read_freeze_frame_trigger(self) -> str | None:
+        self._require_connected()
+        return proto.parse_freeze_frame_trigger(proto.parse_messages(self._command("020200")))
+
+    def read_freeze_frame_value(self, pid: str) -> Measurement:
+        self._require_connected()
+        normalized = normalize_pid(pid)
+        spec = describe_pid(normalized)
+        if spec is None or spec.formula is None:
+            raise UnsupportedPidError(f"PID {normalized} has no decoding definition")
+        if normalized not in self.read_freeze_frame_supported_pids():
+            raise UnsupportedPidError(f"PID {normalized} is not stored in the freeze frame")
+        number = int(normalized[2:], 16)
+        messages = proto.parse_messages(self._command(f"02{number:02X}00"))
+        data = proto.parse_freeze_frame_data(messages, number, spec.data_bytes)
+        return Measurement(pid=spec.pid, name=spec.name, value=spec.decode(data), unit=spec.unit)
+
+    @property
+    def _is_can(self) -> bool:
+        return self._protocol.is_can if self._protocol is not None else False

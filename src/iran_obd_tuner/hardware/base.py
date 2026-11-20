@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Self
 
+from iran_obd_tuner.core.dtc import DtcStatus
 from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
     UnsupportedOperationError,
@@ -32,6 +33,7 @@ from iran_obd_tuner.core.exceptions import (
 )
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import Measurement
+from iran_obd_tuner.core.monitors import MonitorStatus
 from iran_obd_tuner.core.safety import DEFAULT_POLICY, OperationClass, SafetyPolicy, require
 
 __all__ = ["AdapterInfo", "AdapterKind", "MeasurementBatch", "ObdAdapter"]
@@ -255,6 +257,53 @@ class ObdAdapter(ABC):
                 self._log.debug("PID %s is not supported by %s", pid, self.info.name)
                 skipped.append(pid)
         return MeasurementBatch(measurements=tuple(measurements), skipped_pids=tuple(skipped))
+
+    # ------------------------------------------------------------------ #
+    # extended read-only primitives (SAE J1979 services 01/02/03/07/0A)
+    #
+    # The defaults refuse with UnsupportedOperationError, so an adapter supports a
+    # service only when it says so explicitly. None of these change vehicle state.
+    # ------------------------------------------------------------------ #
+
+    def read_trouble_codes(self, status: DtcStatus) -> tuple[str, ...]:
+        """Return raw trouble codes of one category (service 03, 07 or 0A).
+
+        Raises:
+            UnsupportedOperationError: If this adapter or the vehicle lacks the service.
+            AdapterTimeoutError: If the vehicle does not answer (never reported as "none").
+        """
+        if status is DtcStatus.STORED:
+            return self.read_diagnostic_trouble_codes()
+        raise UnsupportedOperationError(
+            f"{self.info.name}: {status} trouble codes (service {status.service}) are not "
+            "supported by this adapter"
+        )
+
+    def read_monitor_status(self) -> MonitorStatus:
+        """Return MIL state, confirmed DTC count and readiness monitors (PID 0101).
+
+        Raises:
+            UnsupportedOperationError: If not supported by this adapter.
+            UnsupportedPidError: If the vehicle does not support PID 0101.
+        """
+        raise UnsupportedOperationError(f"{self.info.name}: PID 0101 is not supported")
+
+    def read_freeze_frame_supported_pids(self) -> tuple[str, ...]:
+        """Return the parameters stored in freeze frame 0, in service 01 request form."""
+        raise UnsupportedOperationError(f"{self.info.name}: freeze frames are not supported")
+
+    def read_freeze_frame_trigger(self) -> str | None:
+        """Return the DTC that triggered freeze frame 0, or ``None`` if none is stored."""
+        raise UnsupportedOperationError(f"{self.info.name}: freeze frames are not supported")
+
+    def read_freeze_frame_value(self, pid: str) -> Measurement:
+        """Read one parameter of freeze frame 0 (``pid`` in service 01 form, e.g. ``"010C"``).
+
+        Raises:
+            UnsupportedPidError: If the parameter is not stored in the freeze frame.
+            AdapterTimeoutError: If the vehicle does not answer.
+        """
+        raise UnsupportedOperationError(f"{self.info.name}: freeze frames are not supported")
 
     # ------------------------------------------------------------------ #
     # state-changing operations: declared, refused, not implemented

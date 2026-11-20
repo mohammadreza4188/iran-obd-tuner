@@ -55,9 +55,14 @@ from iran_obd_tuner.core.exceptions import (
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import VehicleInfo
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot, PidStatus
-from iran_obd_tuner.diagnostics.models import TroubleCode
+from iran_obd_tuner.diagnostics.models import (
+    DtcCategoryResult,
+    FreezeFrameSnapshot,
+    MonitorStatusResult,
+)
 from iran_obd_tuner.diagnostics.recorder import CsvRecorder
 from iran_obd_tuner.ui.backend import DashboardBackend
+from iran_obd_tuner.ui.diagnostics_view import DiagnosticsView
 from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
 from iran_obd_tuner.ui.icon import build_icon
@@ -128,6 +133,10 @@ _PILL_STYLE_IDLE = (
     "background:#1e293b; color:#94a3b8; border-radius:12px; padding:6px 16px; "
     "font-weight:bold; border:1px solid #334155;"
 )
+_MIL_STYLE_BASE = "font-weight: bold; font-size: 11px; border-radius: 4px; padding: 2px 8px; "
+_MIL_STYLE_ON = _MIL_STYLE_BASE + "color: #ffffff; background-color: #dc2626;"
+_MIL_STYLE_OFF = _MIL_STYLE_BASE + "color: #10b981; border: 1px solid #10b981;"
+_MIL_STYLE_UNKNOWN = _MIL_STYLE_BASE + "color: #94a3b8; border: 1px solid #334155;"
 _RECORD_STYLE_ACTIVE = (
     "background-color: #ef4444; color: #ffffff; border: none; border-radius: 8px; "
     "padding: 8px 16px; font-weight: bold;"
@@ -220,7 +229,8 @@ class MainWindow(QMainWindow):
         self.recorder = CsvRecorder()
         self._page = 0
         self._last_snapshot: LiveSnapshot | None = None
-        self._dtc_state: tuple[TroubleCode, ...] | str | None = None
+        # PID 0101 result of the open session; None while disconnected.
+        self._mil_state: MonitorStatusResult | None = None
         # Vehicle identification, or (i18n key, error detail) when it is not available.
         self._ident_state: VehicleInfo | tuple[str, str] | None = None
         self._safety_modal: SafetyModal | None = None
@@ -293,7 +303,10 @@ class MainWindow(QMainWindow):
             "border-radius: 4px; padding: 2px 8px;"
         )
         self.status_pill = QLabel()
+        self.mil_badge = QLabel()
+        self.mil_badge.setStyleSheet(_MIL_STYLE_UNKNOWN)
         badge_box.addWidget(self.version_label)
+        badge_box.addWidget(self.mil_badge)
         badge_box.addWidget(self.guard_badge)
         badge_box.addWidget(self.status_pill)
         header.addLayout(badge_box)
@@ -408,27 +421,13 @@ class MainWindow(QMainWindow):
         graph_layout.addWidget(self.spark)
         self.stack.addWidget(graph_page)
 
-        # Trouble codes
-        diag_page = QWidget()
-        diag_layout = QVBoxLayout(diag_page)
-        diag_header = QHBoxLayout()
-        self.dtc_title = QLabel()
-        self.dtc_title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.refresh_dtc_btn = QPushButton()
-        self.clear_dtc_btn = QPushButton()
-        self.refresh_dtc_btn.clicked.connect(self._refresh_dtc)
-        self.clear_dtc_btn.clicked.connect(self._clear_dtc)
-        diag_header.addWidget(self.dtc_title)
-        diag_header.addStretch()
-        diag_header.addWidget(self.refresh_dtc_btn)
-        diag_header.addWidget(self.clear_dtc_btn)
-        diag_layout.addLayout(diag_header)
-        self.dtc_note = QLabel()
-        self.dtc_note.setStyleSheet("color: #94a3b8;")
-        diag_layout.addWidget(self.dtc_note)
-        self.dtc_list = QListWidget()
-        diag_layout.addWidget(self.dtc_list)
-        self.stack.addWidget(diag_page)
+        # Trouble codes (stored / pending / permanent) and freeze frame 00
+        self.diag_view = DiagnosticsView()
+        self.diag_view.refresh_btn.clicked.connect(self._refresh_dtc)
+        self.diag_view.freeze_btn.clicked.connect(self._read_freeze_frame)
+        self.diag_view.clear_btn.clicked.connect(self._clear_dtc)
+        self.diag_view.set_connected(False)
+        self.stack.addWidget(self.diag_view)
 
         # Identification
         ident_page = QWidget()
@@ -556,10 +555,7 @@ class MainWindow(QMainWindow):
             t["record_stop"] if self.recorder.recording else t["record_start"]
         )
         self.sim_banner.setText(t["sim_banner"])
-        self.dtc_title.setText(t["dtc_title"])
-        self.dtc_note.setText(t["dtc_note"])
-        self.refresh_dtc_btn.setText(t["refresh_dtc"])
-        self.clear_dtc_btn.setText(t["clear_dtc"])
+        self.diag_view.set_language(self.lang)
         self.ident_btn.setText(t["ident_btn"])
         self.bench_title.setText(t["bench_title"])
         self.bench_warning.setText(t["bench_warning"])
@@ -578,7 +574,7 @@ class MainWindow(QMainWindow):
 
         self._update_status_pill()
         self._render_snapshot()
-        self._render_dtc()
+        self._render_mil()
         self._render_identification()
         self._update_recording_label()
 
@@ -695,6 +691,7 @@ class MainWindow(QMainWindow):
         self.record_btn.setEnabled(True)
         self.sim_banner.setVisible(session.simulated)
         self._update_status_pill()
+        self.diag_view.set_connected(True)
         self._refresh_dtc()
         self._tick()
         self.timer.start()
@@ -732,12 +729,13 @@ class MainWindow(QMainWindow):
         if session is not None:
             self._runner.submit(session.disconnect, _ignore, _log_background_error)
         self._last_snapshot = None
-        self._dtc_state = None
+        self._mil_state = None
         self._ident_state = None
         self.spark.clear()
         self._restore_idle_controls()
         self._render_snapshot()
-        self._render_dtc()
+        self.diag_view.set_connected(False)
+        self._render_mil()
         self._render_identification()
         if session is not None:
             self._append_log("msg.disconnected")
@@ -787,43 +785,83 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ trouble codes
     def _refresh_dtc(self) -> None:
+        """Read PID 0101 and the three DTC categories on the worker thread."""
         session = self._session
         if session is None:
-            self._dtc_state = None
-            self._render_dtc()
             return
         generation = self._generation
+
+        def job() -> tuple[MonitorStatusResult, tuple[DtcCategoryResult, ...]]:
+            return session.read_monitor_status(), session.read_trouble_code_categories()
+
         self._runner.submit(
-            session.read_trouble_codes,
-            lambda codes: self._on_dtc(generation, codes),
+            job,
+            lambda result: self._on_dtc(generation, result),
             lambda exc: self._on_dtc(generation, exc),
         )
 
-    def _on_dtc(self, generation: int, result: tuple[TroubleCode, ...] | BaseException) -> None:
+    def _on_dtc(
+        self,
+        generation: int,
+        result: tuple[MonitorStatusResult, tuple[DtcCategoryResult, ...]] | BaseException,
+    ) -> None:
         if generation != self._generation:
             return
         if isinstance(result, BaseException):
-            self._dtc_state = _describe(result)
-            self._append_log("msg.dtc_read_error", self._dtc_state)
-        else:
-            self._dtc_state = result
-            self._append_log("msg.dtc_read", len(result))
-        self._render_dtc()
+            detail = _describe(result)
+            self._append_log("msg.dtc_read_error", detail)
+            self.diag_view.show_categories(detail)
+            return
+        monitor, categories = result
+        self._mil_state = monitor
+        self._render_mil()
+        self.diag_view.show_categories(categories)
+        self._append_log("msg.dtc_read", sum(len(c.codes) for c in categories))
 
-    def _render_dtc(self) -> None:
-        t = COPY[self.lang]
-        self.dtc_list.clear()
-        state = self._dtc_state
+    def _read_freeze_frame(self) -> None:
+        session = self._session
+        if session is None:
+            return
+        generation = self._generation
+        self._runner.submit(
+            session.read_freeze_frame,
+            lambda frame: self._on_freeze_frame(generation, frame),
+            lambda exc: self._on_freeze_frame(generation, exc),
+        )
+
+    def _on_freeze_frame(
+        self, generation: int, result: FreezeFrameSnapshot | BaseException
+    ) -> None:
+        if generation != self._generation:
+            return
+        if isinstance(result, BaseException):
+            detail = _describe(result)
+            self._append_log("msg.ff_error", detail)
+            self.diag_view.show_freeze_frame(detail)
+            return
+        trigger = result.trigger.code if result.trigger is not None else "-"
+        self._append_log("msg.ff_read", trigger)
+        self.diag_view.show_freeze_frame(result)
+
+    def _render_mil(self) -> None:
+        mil = COPY[self.lang]["mil"]
+        state = self._mil_state
+        tooltip = ""
         if state is None:
-            self.dtc_list.addItem(t["dtc_not_connected"])
-        elif isinstance(state, str):
-            self.dtc_list.addItem(t["dtc_read_failed"].format(state))
-        elif not state:
-            self.dtc_list.addItem(t["no_dtc"])
+            text, style = mil["disconnected"], _MIL_STYLE_UNKNOWN
+        elif state.status is None:
+            text, style = mil["unknown"], _MIL_STYLE_UNKNOWN
+            tooltip = state.detail or ""
+        elif state.status.mil_on:
+            text, style = mil["on"].format(state.status.confirmed_dtc_count), _MIL_STYLE_ON
         else:
-            for code in state:
-                description = code.description or t["dtc_unknown_description"]
-                self.dtc_list.addItem(f"{code.code}  —  {description}")
+            text, style = mil["off"], _MIL_STYLE_OFF
+        if state is not None and state.status is not None:
+            incomplete = ", ".join(state.status.incomplete_monitors) or "-"
+            tooltip = COPY[self.lang]["mil_incomplete"].format(incomplete)
+        self.mil_badge.setText(text)
+        self.mil_badge.setStyleSheet(style)
+        self.mil_badge.setToolTip(tooltip)
 
     def _clear_dtc(self) -> None:
         """Forward the request to the adapter's safety gate and explain the refusal.
