@@ -148,15 +148,97 @@ COPY: dict[str, dict[str, Any]] = {
             "warning": "چراغ هشدار",
             "none": "بدون پرچم",
         },
-        "bench_title": "میز کار و تیونینگ ECU",
+        "bench_title": "میز کار ROM (تحلیل آفلاین فایل)",
         "bench_warning": (
-            "این بخش در این نسخه پیاده‌سازی نشده است. هیچ خواندن ROM، نوشتن روی ECU یا "
-            "دسترسی امنیتی وجود ندارد. هر قابلیت آینده نیازمند تأیید صریح صاحب پروژه، "
-            "شواهد فنی و اعتبارسنجی کنترل‌شده است."
+            "فاز ۴: فقط تحلیل آفلاین فایل. هیچ داده‌ای از ECU خوانده یا روی آن نوشته نمی‌شود. فایل"
+            " خروجی برای هیچ خودرو یا ECU تأیید نشده است و این برنامه امکان فلش کردن آن را ندارد."
         ),
-        "bench_btn_read": "خواندن ROM — پیاده‌سازی نشده",
-        "bench_btn_write": "نوشتن روی ECU — پیاده‌سازی نشده",
-        "bench_btn_unlock": "دسترسی امنیتی (Security Access) — پیاده‌سازی نشده",
+        "bench_btn_read": "خواندن ROM از ECU — قفل",
+        "bench_btn_write": "نوشتن روی ECU — قفل",
+        "bench_btn_unlock": "دسترسی امنیتی (Security Access) — قفل",
+        "bench_phase5": "فاز ۵ (کار مستقیم با ECU) — قفل و پیاده‌نشده:",
+        "bench_open": "باز کردن ROM…",
+        "bench_open_demo": "باز کردن نمونه شبیه‌سازی",
+        "bench_load_defs": "بارگذاری تعریف نقشه‌ها…",
+        "bench_undo": "بازگردانی",
+        "bench_redo": "انجام دوباره",
+        "bench_recalc": "بازمحاسبه چک‌سام‌ها",
+        "bench_export": "خروجی ROM اصلاح‌شده…",
+        "bench_open_dialog": "باز کردن فایل ROM (.bin)",
+        "bench_open_filter": "ROM (*.bin);;All files (*)",
+        "bench_defs_dialog": "باز کردن فایل تعریف نقشه‌ها",
+        "bench_defs_filter": "JSON (*.json)",
+        "bench_export_dialog": "ذخیره ROM اصلاح‌شده (فایلی دیگر، نه فایل اصلی)",
+        "bench_export_filter": "ROM (*.bin)",
+        "bench_no_rom": "یک فایل ROM یا نمونه شبیه‌سازی‌شده را باز کنید.",
+        "bench_rom_line": "فایل: {0} — {1} بایت",
+        "bench_simulated_badge": "⚠️ شبیه‌سازی‌شده — تصویر هیچ ECU واقعی نیست",
+        "bench_defs_none": "تعریف نقشه‌ای بارگذاری نشده است؛ چک‌سام: پیکربندی نشده",
+        "bench_defs_line": "تعریف‌ها: {0} ({1}) — اطمینان: {2} — {3} نقشه، {4} چک‌سام",
+        "bench_defs_simulated": "شبیه‌سازی‌شده",
+        "bench_defs_user": "ارائه‌شده توسط کاربر",
+        "bench_warning_line": "⚠️ {0}",
+        "bench_maps_title": "نقشه‌ها",
+        "bench_categories": {
+            "fuel": "سوخت",
+            "ignition": "جرقه",
+            "torque": "گشتاور",
+            "limiter": "محدودکننده",
+            "other": "سایر",
+        },
+        "bench_strings_title": "رشته‌های ASCII مشاهده‌شده (فقط شاهد، بدون شناسایی): {0}",
+        "bench_strings_filter": "فیلتر رشته‌ها…",
+        "bench_strings_columns": {"offset": "آفست", "text": "متن"},
+        "bench_table_none": "یک نقشه را انتخاب کنید.",
+        "bench_table_title": "{0} [{1}] — {2}×{3}",
+        "bench_view_label": "نما:",
+        "bench_view_modes": {
+            "original": "اصلی",
+            "modified": "اصلاح‌شده (قابل ویرایش)",
+            "delta": "تفاوت",
+            "delta_percent": "تفاوت ٪",
+        },
+        "bench_na": "نامشخص",
+        "bench_cell_tip": "اصلی: {0} — فعلی: {1} — بازه مجاز: {2} تا {3} {4}",
+        "bench_value_label": "مقدار:",
+        "bench_set_btn": "اعمال روی خانه‌های انتخاب‌شده",
+        "bench_percent_label": "درصد:",
+        "bench_add_pct_btn": "افزودن درصد به انتخاب",
+        "bench_checksums_title": (
+            "چک‌سام‌ها («معتبر» یعنی مطابق الگوریتم تعریف‌شده؛ نه اینکه ECU آن را می‌پذیرد)"
+        ),
+        "bench_checksum_columns": {
+            "id": "شناسه",
+            "algorithm": "الگوریتم",
+            "range": "بازه",
+            "values": "ذخیره‌شده / محاسبه‌شده",
+            "status": "وضعیت",
+        },
+        "bench_checksum_status": {
+            "valid": "معتبر",
+            "invalid": "نامعتبر",
+            "not_configured": "پیکربندی نشده",
+        },
+        "bench_busy": "در حال کار…",
+        "bench_failed": "انجام نشد: {0}",
+        "bench_opened": "باز شد: {0}",
+        "bench_defs_loaded": "تعریف نقشه‌ها بارگذاری شد.",
+        "bench_undone": "بازگردانی شد: {0}",
+        "bench_redone": "دوباره انجام شد: {0}",
+        "bench_recalc_done": "{0} چک‌سام در نسخه کاری بازمحاسبه شد (فایل اصلی دست‌نخورده است).",
+        "bench_edit_refused": "ویرایش رد شد (چیزی تغییر نکرد): {0}",
+        "bench_edit_done": "{0} خانه تغییر کرد (بیشترین خطای گرد کردن: {1})",
+        "bench_confirm_title": "خروجی ROM اصلاح‌شده",
+        "bench_confirm_text": (
+            "یک فایل جدید نوشته می‌شود؛ فایل اصلی هرگز تغییر نمی‌کند. این فایل برای هیچ خودرو یا"
+            " ECU تأیید نشده است، چک‌سام فقط با الگوریتم تعریف‌شده بررسی شده و این برنامه هیچ"
+            " راهی برای فلش کردن آن ندارد. یک فایل مانیفست کنار آن ذخیره می‌شود."
+        ),
+        "bench_confirm_check": (
+            "می‌دانم این فایل برای هیچ ECU تأیید نشده و این برنامه آن را فلش نمی‌کند"
+        ),
+        "bench_export_cancelled": "خروجی لغو شد؛ چیزی نوشته نشد.",
+        "bench_exported": "ذخیره شد: {0} (SHA-256 {1}…) — مانیفست: {2}",
         "safety_title": "هشدار ایمنی",
         "safety_heading": "🛑 عملیات مسدود شد",
         "safety_clear_dtc_msg": (
@@ -556,15 +638,101 @@ COPY: dict[str, dict[str, Any]] = {
             "warning": "warning lamp",
             "none": "no flag set",
         },
-        "bench_title": "ECU Bench & Tuning",
+        "bench_title": "ROM workbench (offline file analysis)",
         "bench_warning": (
-            "This section is not implemented in this build. There is no ROM reading, no ECU "
-            "writing and no security access. Any future capability requires explicit owner "
-            "approval, technical evidence and controlled validation."
+            "Phase 4: offline file analysis only. Nothing is read from or written to any ECU."
+            " Exported files are not validated for any vehicle or ECU, and this program cannot"
+            " flash them."
         ),
-        "bench_btn_read": "Read ROM — not implemented",
-        "bench_btn_write": "Write to ECU — not implemented",
-        "bench_btn_unlock": "Security Access — not implemented",
+        "bench_btn_read": "Read ROM from ECU — locked",
+        "bench_btn_write": "Write to ECU — locked",
+        "bench_btn_unlock": "Security Access — locked",
+        "bench_phase5": "Phase 5 (direct ECU work) — locked, not implemented:",
+        "bench_open": "Open ROM…",
+        "bench_open_demo": "Open SIMULATED demo",
+        "bench_load_defs": "Load map definitions…",
+        "bench_undo": "Undo",
+        "bench_redo": "Redo",
+        "bench_recalc": "Recalculate checksums",
+        "bench_export": "Export modified ROM…",
+        "bench_open_dialog": "Open a ROM file (.bin)",
+        "bench_open_filter": "ROM (*.bin);;All files (*)",
+        "bench_defs_dialog": "Open a map definition file",
+        "bench_defs_filter": "JSON (*.json)",
+        "bench_export_dialog": "Save the modified ROM (a different file, never the source)",
+        "bench_export_filter": "ROM (*.bin)",
+        "bench_no_rom": "Open a ROM file or the SIMULATED demo.",
+        "bench_rom_line": "File: {0} — {1} bytes",
+        "bench_simulated_badge": "⚠️ SIMULATED — not an image of any real ECU",
+        "bench_defs_none": "No map definitions loaded; checksums: not configured",
+        "bench_defs_line": "Definitions: {0} ({1}) — confidence: {2} — {3} map(s), {4} checksum(s)",
+        "bench_defs_simulated": "SIMULATED",
+        "bench_defs_user": "user-supplied",
+        "bench_warning_line": "⚠️ {0}",
+        "bench_maps_title": "Maps",
+        "bench_categories": {
+            "fuel": "Fuel",
+            "ignition": "Ignition",
+            "torque": "Torque",
+            "limiter": "Limiter",
+            "other": "Other",
+        },
+        "bench_strings_title": "Observed ASCII strings (evidence only, no identification): {0}",
+        "bench_strings_filter": "Filter strings…",
+        "bench_strings_columns": {"offset": "Offset", "text": "Text"},
+        "bench_table_none": "Select a map.",
+        "bench_table_title": "{0} [{1}] — {2}×{3}",
+        "bench_view_label": "View:",
+        "bench_view_modes": {
+            "original": "Original",
+            "modified": "Modified (editable)",
+            "delta": "Delta",
+            "delta_percent": "Delta %",
+        },
+        "bench_na": "n/a",
+        "bench_cell_tip": "Original: {0} — current: {1} — allowed: {2} to {3} {4}",
+        "bench_value_label": "Value:",
+        "bench_set_btn": "Set selected cells",
+        "bench_percent_label": "Percent:",
+        "bench_add_pct_btn": "Add % to selection",
+        "bench_checksums_title": (
+            "Checksums (valid = matches the configured algorithm; not proof any ECU accepts it)"
+        ),
+        "bench_checksum_columns": {
+            "id": "Id",
+            "algorithm": "Algorithm",
+            "range": "Range",
+            "values": "Stored / computed",
+            "status": "Status",
+        },
+        "bench_checksum_status": {
+            "valid": "Valid",
+            "invalid": "Invalid",
+            "not_configured": "Not configured",
+        },
+        "bench_busy": "Working…",
+        "bench_failed": "Failed: {0}",
+        "bench_opened": "Opened: {0}",
+        "bench_defs_loaded": "Map definitions loaded.",
+        "bench_undone": "Undone: {0}",
+        "bench_redone": "Redone: {0}",
+        "bench_recalc_done": (
+            "{0} checksum(s) recalculated in the working copy (the source file is untouched)."
+        ),
+        "bench_edit_refused": "Edit refused (nothing changed): {0}",
+        "bench_edit_done": "{0} cell(s) changed (largest rounding error: {1})",
+        "bench_confirm_title": "Export modified ROM",
+        "bench_confirm_text": (
+            "A new file will be written; the source file is never changed. The file is not"
+            " validated for any vehicle or ECU, its checksums were only checked against the"
+            " configured algorithm, and this program has no way to flash it. A manifest is"
+            " saved next to it."
+        ),
+        "bench_confirm_check": (
+            "I understand this file is not validated for any ECU and this program cannot flash it"
+        ),
+        "bench_export_cancelled": "Export cancelled; nothing was written.",
+        "bench_exported": "Saved: {0} (SHA-256 {1}…) — manifest: {2}",
         "safety_title": "Safety warning",
         "safety_heading": "🛑 Operation blocked",
         "safety_clear_dtc_msg": (

@@ -29,6 +29,7 @@ VIEW_SOURCES = "".join(
         "performance_view.py",
         "uds_view.py",
         "knowledge_view.py",
+        "bench_view.py",
     )
 )
 
@@ -91,6 +92,12 @@ def test_every_top_level_key_used_by_the_window_exists() -> None:
     used |= set(re.findall(r'COPY\[self\.lang\]\["(\w+)"\]', WINDOW_SOURCE))
     # identification errors are stored as (key, detail) and rendered later with t[key]
     used |= set(re.findall(r'\("(ident_\w+)", ', WINDOW_SOURCE))
+    # the Bench view selects its status line by key: self._say("bench_...")
+    bench_status = set(re.findall(r'_say\(\s*"(\w+)"', VIEW_SOURCES))
+    assert len(bench_status) >= 8, bench_status
+    used |= bench_status
+    # export results are picked by key in the knowledge view
+    used |= set(re.findall(r'"(kb_export_\w+)"', VIEW_SOURCES))
 
     assert used, "the regular expressions found nothing; update this test"
     for lang in LANGUAGES:

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E4
 
 from iran_obd_tuner import __version__  # noqa: E402
 from iran_obd_tuner.app.dashboard import AppDashboardBackend  # noqa: E402
+from iran_obd_tuner.core.calibration import TableViewMode  # noqa: E402
 from iran_obd_tuner.core.config import AppSettings  # noqa: E402
 from iran_obd_tuner.core.exceptions import AdapterConnectionError  # noqa: E402
 from iran_obd_tuner.core.knowledge import ConfidenceLevel  # noqa: E402
@@ -914,3 +915,208 @@ def test_export_cancelled_writes_nothing(
     settle(window)
     assert window.kb_view.export_status.text() == ""
     assert list(tmp_path.glob("*.json")) == []
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 6: Bench tab (offline ROM analysis)
+# --------------------------------------------------------------------------- #
+
+
+def _bench(window: MainWindow):
+    window.lang_combo.setCurrentIndex(1)  # English
+    window._switch_tab("bench")
+    return window.bench_view
+
+
+def _open_demo(window: MainWindow):
+    view = _bench(window)
+    view.demo_btn.click()
+    settle(window)
+    return view
+
+
+def _cell(view, row: int, col: int) -> str:
+    return view.grid.item(row, col).text()
+
+
+def _checksum_states(view) -> list[str]:
+    table = view.checksum_table
+    return [table.item(r, 4).data(Qt.ItemDataRole.UserRole) for r in range(table.rowCount())]
+
+
+def test_bench_starts_empty_with_phase5_locked(window: MainWindow) -> None:
+    view = _bench(window)
+    assert view.banner.text() == COPY["en"]["bench_warning"]
+    assert "Nothing is read from or written to any ECU" in view.banner.text()
+    assert view.info_label.text() == COPY["en"]["bench_no_rom"]
+    for btn in (view.read_ecu_btn, view.write_ecu_btn, view.unlock_ecu_btn):
+        assert not btn.isEnabled()
+    for btn in (view.undo_btn, view.redo_btn, view.export_btn, view.defs_btn, view.recalc_btn):
+        assert not btn.isEnabled()
+    assert view.open_btn.isEnabled() and view.demo_btn.isEnabled()
+
+
+def test_bench_opens_the_simulated_demo(window: MainWindow) -> None:
+    view = _open_demo(window)
+    assert "SHA-256: 017c76f637fdaab12da54c6ab8ec4b8e" in view.info_label.text().replace("\n", " ")
+    assert view.sim_label.text() == COPY["en"]["bench_simulated_badge"]
+    assert view.map_list.count() == 4 and view.map_id == "demo_fuel_base"
+    assert view.strings_table.rowCount() >= 2
+    assert view.strings_table.item(0, 1).text().startswith("SIMULATED-DEMO-ROM")
+    assert _checksum_states(view) == ["valid", "valid"]
+    assert (view.grid.rowCount(), view.grid.columnCount()) == (8, 8)
+    assert _cell(view, 0, 0) == "2.00"
+    assert view.grid.horizontalHeaderItem(0).text() == "1000 rpm"
+    low = view.grid.item(0, 0).background().color().name()
+    high = view.grid.item(7, 7).background().color().name()
+    assert low != high  # heatmap
+    assert view.mode is TableViewMode.MODIFIED
+    assert view.mode_combo.currentData() == "modified"
+
+
+def test_bench_edit_undo_redo_and_views(window: MainWindow) -> None:
+    view = _open_demo(window)
+    view.grid.item(0, 0).setText("3")
+    assert _cell(view, 0, 0) == "3.00"
+    assert view.grid.item(0, 0).font().bold()
+    assert "1 cell(s) changed" in view.status_label.text()
+    assert _checksum_states(view)[0] == "invalid"
+    assert view.undo_btn.isEnabled() and view.export_btn.isEnabled()
+    assert not view.defs_btn.isEnabled()  # definitions cannot change mid-edit
+    view.set_mode(TableViewMode.DELTA)
+    assert _cell(view, 0, 0) == "+1.00" and _cell(view, 0, 1) == "+0.00"
+    assert not (view.grid.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
+    view.set_mode(TableViewMode.DELTA_PERCENT)
+    assert _cell(view, 0, 0) == "+50.0%"
+    view.set_mode(TableViewMode.ORIGINAL)
+    assert _cell(view, 0, 0) == "2.00"
+    view.set_mode(TableViewMode.MODIFIED)
+    view.undo_btn.click()
+    assert _cell(view, 0, 0) == "2.00" and view.redo_btn.isEnabled()
+    view.redo_btn.click()
+    assert _cell(view, 0, 0) == "3.00"
+
+
+def test_bench_refuses_out_of_range_and_bad_numbers(window: MainWindow) -> None:
+    view = _open_demo(window)
+    view.grid.item(0, 0).setText("99")
+    assert "Edit refused" in view.status_label.text() and "0..20" in view.status_label.text()
+    assert _cell(view, 0, 0) == "2.00" and not view.undo_btn.isEnabled()
+    view.grid.item(0, 1).setText("abc")
+    assert "Edit refused" in view.status_label.text()
+    assert _cell(view, 0, 1) == "2.20"
+
+
+def test_bench_selection_tools_and_persian_digits(window: MainWindow) -> None:
+    from PySide6.QtWidgets import QTableWidgetSelectionRange
+
+    from iran_obd_tuner.ui.bench_view import parse_number
+
+    assert parse_number("۳٫۵") == 3.5 and parse_number(" 2,5 ") == 2.5
+    view = _open_demo(window)
+    view.grid.setRangeSelected(QTableWidgetSelectionRange(0, 0, 1, 1), True)
+    view.value_edit.setText("۴")
+    view.set_btn.click()
+    assert [_cell(view, r, c) for r in (0, 1) for c in (0, 1)] == ["4.00"] * 4
+    view.percent_edit.setText("-50")
+    view.percent_btn.click()
+    assert _cell(view, 1, 1) == "2.00"
+    view.undo_btn.click()
+    assert _cell(view, 1, 1) == "4.00"  # one undo step per batch
+
+
+def test_bench_export_needs_valid_checksums_and_writes_a_manifest(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    target = tmp_path / "exported.bin"
+    offered: list[str] = []
+
+    def fake_save(_parent: object, _title: str, default: str, _filter: str):
+        offered.append(default)
+        return str(target), _filter
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(fake_save))
+    view = _open_demo(window)
+    monkeypatch.setattr(view, "confirm_export", lambda: True)
+    view.grid.item(0, 0).setText("3")
+    view.export_btn.click()
+    settle(window)
+    assert "recalculate them first" in view.status_label.text()
+    assert not target.exists()
+    view.recalc_btn.click()
+    assert _checksum_states(view) == ["valid", "valid"]
+    view.export_btn.click()
+    settle(window)
+    assert offered[-1].endswith("simulated_demo_rom_modified.bin")
+    assert target.exists() and str(target) in view.status_label.text()
+    manifest = json.loads((tmp_path / "exported.bin.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["validated_for_vehicle"] is False and manifest["simulated"] is True
+
+
+def test_bench_export_without_acknowledgement_writes_nothing(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *a: calls.append("save") or ("", ""))
+    )
+    view = _open_demo(window)
+    monkeypatch.setattr(view, "confirm_export", lambda: False)
+    view.grid.item(0, 0).setText("3")
+    view.recalc_btn.click()
+    view.export_btn.click()
+    assert calls == []  # the file dialog is not even shown
+    assert view.status_label.text() == COPY["en"]["bench_export_cancelled"]
+
+
+def test_bench_never_overwrites_the_source_file(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from iran_obd_tuner.tuning.demo import build_demo_rom, demo_definitions_text
+
+    rom = tmp_path / "stock.bin"
+    rom.write_bytes(build_demo_rom())
+    defs = tmp_path / "defs.json"
+    defs.write_text(demo_definitions_text(), encoding="utf-8")
+    view = _bench(window)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a: (str(rom), "")))
+    view.open_btn.click()
+    settle(window)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a: (str(defs), "")))
+    view.defs_btn.click()
+    settle(window)
+    assert view.map_list.count() == 4
+    assert "non-simulated ROM" in view.info_label.text()  # a file is not known to be simulated
+    view.grid.item(0, 0).setText("3")
+    view.recalc_btn.click()
+    monkeypatch.setattr(view, "confirm_export", lambda: True)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a: (str(rom), "")))
+    view.export_btn.click()
+    settle(window)
+    assert "source ROM" in view.status_label.text()
+    assert rom.read_bytes() == build_demo_rom()
+
+
+def test_bench_open_failure_is_reported(
+    window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tiny = tmp_path / "tiny.bin"
+    tiny.write_bytes(b"\x00" * 100)
+    view = _bench(window)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a: (str(tiny), "")))
+    view.open_btn.click()
+    settle(window)
+    assert "smaller than the minimum ROM size" in view.status_label.text()
+    assert view.info_label.text() == COPY["en"]["bench_no_rom"]
+
+
+def test_bench_is_bilingual(window: MainWindow) -> None:
+    view = _open_demo(window)
+    window.lang_combo.setCurrentIndex(0)
+    assert view.title_label.text() == COPY["fa"]["bench_title"]
+    assert view.splitter.layoutDirection() == LAYOUT_RTL
+    assert view.grid.layoutDirection() == LAYOUT_LTR  # numbers and axes stay left to right
+    assert view.checksum_table.item(0, 4).text() == COPY["fa"]["bench_checksum_status"]["valid"]
+    assert "[سوخت]" in view.map_list.item(0).text()

@@ -74,6 +74,7 @@ from iran_obd_tuner.diagnostics.models import (
 from iran_obd_tuner.diagnostics.recorder import CsvRecorder
 from iran_obd_tuner.diagnostics.vehicle_matcher import ObservedFacts, rank_candidates
 from iran_obd_tuner.ui.backend import DashboardBackend
+from iran_obd_tuner.ui.bench_view import BenchView
 from iran_obd_tuner.ui.diagnostics_view import DiagnosticsView
 from iran_obd_tuner.ui.gauges import GaugeCard
 from iran_obd_tuner.ui.i18n import COPY, Lang, format_message
@@ -510,32 +511,14 @@ class MainWindow(QMainWindow):
         kb_scroll.setWidget(self.kb_view)
         self.stack.addWidget(kb_scroll)
 
-        # Bench (not implemented: disabled placeholders that say so)
-        bench_page = QWidget()
-        bench_layout = QVBoxLayout(bench_page)
-        self.bench_title = QLabel()
-        self.bench_title.setStyleSheet("color: #ef4444; font-size: 20px; font-weight: bold;")
-        self.bench_title.setAlignment(Qt.AlignCenter)
-        self.bench_warning = QLabel()
-        self.bench_warning.setWordWrap(True)
-        self.bench_warning.setAlignment(Qt.AlignCenter)
-        self.bench_warning.setStyleSheet(
-            "background-color: #1e293b; color: #94a3b8; padding: 16px; border-radius: 8px; "
-            "border: 1px solid #334155; margin-top: 10px; margin-bottom: 20px;"
-        )
-        btn_layout = QVBoxLayout()
-        self.bench_btn_read = QPushButton()
-        self.bench_btn_write = QPushButton()
-        self.bench_btn_unlock = QPushButton()
-        for btn in (self.bench_btn_read, self.bench_btn_write, self.bench_btn_unlock):
-            btn.setEnabled(False)
-            btn.setMinimumHeight(40)
-            btn_layout.addWidget(btn)
-        bench_layout.addWidget(self.bench_title)
-        bench_layout.addWidget(self.bench_warning)
-        bench_layout.addLayout(btn_layout)
-        bench_layout.addStretch()
-        self.stack.addWidget(bench_page)
+        # Bench: offline ROM file analysis (Phase 4); ECU access (Phase 5) stays locked
+        self.bench_view = BenchView(self._backend.create_bench_workspace(), self._runner.submit)
+        self.bench_title = self.bench_view.title_label
+        bench_scroll = QScrollArea()
+        bench_scroll.setWidgetResizable(True)
+        bench_scroll.setFrameShape(QFrame.NoFrame)
+        bench_scroll.setWidget(self.bench_view)
+        self.stack.addWidget(bench_scroll)
 
         # Settings
         settings_page = QWidget()
@@ -628,11 +611,7 @@ class MainWindow(QMainWindow):
         self.ident_obd_title.setText(t["ident_obd_title"])
         self.uds_view.set_language(self.lang)
         self.kb_view.set_language(self.lang)
-        self.bench_title.setText(t["bench_title"])
-        self.bench_warning.setText(t["bench_warning"])
-        self.bench_btn_read.setText(t["bench_btn_read"])
-        self.bench_btn_write.setText(t["bench_btn_write"])
-        self.bench_btn_unlock.setText(t["bench_btn_unlock"])
+        self.bench_view.set_language(self.lang)
         self.lang_label.setText(t["settings_lang"])
         self.mode_label.setText(t["settings_mode"])
         self.mode_combo.setItemText(0, t["mode_sim"])

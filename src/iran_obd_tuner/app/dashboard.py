@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from iran_obd_tuner.app.application import uds_link_config
+from iran_obd_tuner.app.bench import AppBenchWorkspace
 from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings
 from iran_obd_tuner.core.exceptions import ConfigurationError
 from iran_obd_tuner.core.knowledge import LocalizedText, Manufacturer, VehicleProfile
@@ -116,6 +117,9 @@ class AppDashboardBackend:
             channel=s.can_channel,
             bitrate=s.can_bitrate,
         )
+
+    def create_bench_workspace(self) -> AppBenchWorkspace:
+        return AppBenchWorkspace(self._settings.output_dir)
 
     @property
     def vehicle_profiles(self) -> tuple[VehicleProfile, ...]:
