@@ -80,6 +80,7 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `hardware/isotp.py` | ISO-TP خودِ پروژه: `IsoTpChannel` (SF/FF/CF/FC، BS، STmin، Wait)، `functional_request` | پیاده‌شده |
 | `hardware/uds.py` | `UdsClient` فقط‌خواندنی، فهرست سفید `check_request_allowed`، NRCها، decode DTC، `discover_ecus` | پیاده‌شده |
 | `hardware/uds_sim.py` | `SimulatedUdsEcu` قطعی + `VirtualBusEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
+| `hardware/uds_sim_programmable.py` | (Milestone 7b) `VirtualProgrammableEcu`: سمت ECU شبیه‌سازی‌شده برنامه‌ریزی Bench (فلش NOR، bootloader، seed-key با شمارنده تلاش و تأخیر، erase/checkMemory، دانلود/آپلود بلوکی)، `FaultPlan`، `SimulatedXorSeedKey` و `VirtualProgrammableEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
 | `hardware/uds_link.py` | `UdsLink`/`UdsLinkConfig`: رابط CAN ← ISO-TP ← `UdsClient`؛ `virtual-sim` = باس مجازی + ECU شبیه‌سازی | پیاده‌شده |
 | `diagnostics/ecu_identification.py` | `read_ecu_identification` (DID و DTC مستقل، fallback جلسه Extended با opt-in)، `EcuIdentification`، `UdsIdentificationSession` | پیاده‌شده |
 | `ui/uds_view.py` | بخش «شناسایی ECU با UDS» در تب شناسایی | پیاده‌شده |
@@ -283,6 +284,12 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
   - مسیرهای فقط‌خواندنی (`hardware/uds.py`، ELM327، ISO-TP، CAN، شبیه‌ساز فقط‌خواندنی و کل
     `diagnostics`) نه `core.bench` را import می‌کنند و نه `BENCH_FLASH` را می‌شناسند. سطح عمومی
     `UdsClient` و فهرست سفید آن قفل است (تست AST).
+  - **ECU برنامه‌پذیر شبیه‌سازی‌شده (Milestone 7b):** `hardware/uds_sim_programmable.py` فقط
+    *پاسخ‌دهنده* است. نام سرویس‌های برنامه‌ریزی در آن مجاز است، ولی مانند هر ماژول دیگر هیچ literal
+    درخواستی با SID آن سرویس‌ها نمی‌سازد (تست AST). سرور آن فقط با رشته ثابت `"virtual"` باز می‌شود،
+    پارامتر `interface` ندارد و فقط `hardware/bench_link.py` (7c) اجازه دارد آن را بسازد یا import کند.
+    `SimulatedUdsEcu` فقط‌خواندنی دست‌نخورده است و همچنان هر سرویس نوشتنی را `0x11` جواب می‌دهد.
+    همه مقدارها ساختگی‌اند (`SIM-...`) و seed-key یک XOR منتشرشده (`"SIM!"`) است.
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -431,6 +438,7 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۵۷ | (Milestone 7a) قراردادها (`BenchProgrammerPort`، `SeedKeyProvider`) در `core` | `tuning` فقط `core` را import می‌کند و `hardware` باید port را پیاده کند؛ وارونه‌سازی وابستگی بدون شکستن قواعد لایه‌ها | import `hardware` در `tuning` |
 | ۵۸ | (Milestone 7a) `BenchAttestation` (تأیید انسانی) جدا از بررسی‌های ماشینی؛ `BenchSafetyChecklist` برای سازگاری می‌ماند | نرم‌افزار ولتاژ منبع یا میز کار را نمی‌بیند؛ پشتیبان و اعتبار ROM را خودش ثابت می‌کند، پس نباید آن‌ها را از کاربر بپرسد | یک چک‌لیست مخلوط |
 | ۵۹ | (Milestone 7a) `SeedKeyProvider` فقط interface؛ بدون الگوریتم واقعی و بدون سازوکار plugin | ساختن یا مهندسی معکوس الگوریتم سازنده ممنوع است (CLAUDE.md بخش ۶)؛ بارگذاری کد خارجی مسیر تزریق است | ورود provider از entry point |
+| ۶۰ | (Milestone 7b) ECU برنامه‌پذیر شبیه‌سازی‌شده: اعتبار برنامه فقط با checkMemory موفق روی کل فلش و تا وقتی CRC همان است؛ حالت پایدار (فلش، رکورد اعتبار، شمارنده کلید غلط) از RAM جداست؛ هر fault فقط یک بار رخ می‌دهد | همان رفتاری که bootloader واقعی دارد، بدون وابستگی به محتوای تصویر؛ قطع برق باید فلش نیمه‌نوشته و bootloader را باقی بگذارد؛ fault یک‌باره اجازه می‌دهد بازیابی بعدی به‌طور قطعی تست شود | CRC درون خود تصویر؛ fault دائمی |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)

@@ -156,6 +156,10 @@ WRITE_SERVICE_NAMES = (
 )
 #: The only module allowed to name these services: the allowlist that refuses them.
 POLICY_MODULE = "hardware/uds.py"
+#: Milestone 7b: the virtual programmable ECU is the *answering* side of these services; it
+#: may name them, but (scanned below like every other module) never build a request.
+SIMULATOR_MODULE = "hardware/uds_sim_programmable.py"
+WRITE_SERVICE_NAME_MODULES = {POLICY_MODULE, SIMULATOR_MODULE}
 
 
 def _first_request_byte(node: ast.AST) -> int | None:
@@ -201,7 +205,9 @@ def test_write_service_names_appear_only_in_the_allowlist() -> None:
     for path in sorted(PACKAGE_DIR.rglob("*.py")):
         relative = path.relative_to(PACKAGE_DIR).as_posix()
         text = path.read_text(encoding="utf-8")
-        if relative != POLICY_MODULE and any(name in text for name in WRITE_SERVICE_NAMES):
+        if relative not in WRITE_SERVICE_NAME_MODULES and any(
+            name in text for name in WRITE_SERVICE_NAMES
+        ):
             offenders.append(relative)
     assert offenders == []
 
@@ -651,3 +657,80 @@ def test_the_bench_contract_is_passive() -> None:
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             assert name not in _FILE_WRITE_CALLS | {"open", "send", "write"}, (name, node.lineno)
         assert _first_request_byte(node) is None, getattr(node, "lineno", "?")
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7b: the virtual programmable ECU stays a simulator on the virtual bus
+# --------------------------------------------------------------------------- #
+
+#: The only module that may create the programmable simulator's server (planned, 7c).
+PROGRAMMABLE_SERVER_CREATORS = {"hardware/bench_link.py"}
+#: Request service identifiers of bench work; the simulator answers them but never builds one.
+_BENCH_REQUEST_SIDS = WRITE_SIDS | {0x10, 0x19, 0x22, 0x3E}
+
+
+def _simulator_tree() -> ast.Module:
+    return ast.parse((PACKAGE_DIR / SIMULATOR_MODULE).read_text(encoding="utf-8"))
+
+
+def test_the_programmable_simulator_opens_only_the_virtual_bus() -> None:
+    tree = _simulator_tree()
+    opens = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "open"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "PythonCanBus"
+        ):
+            first = node.args[0] if node.args else None
+            opens.append(isinstance(first, ast.Constant) and first.value == "virtual")
+        if isinstance(node, ast.Attribute) and node.attr == "Bus":
+            raise AssertionError(f"{SIMULATOR_MODULE}:{node.lineno} uses can.Bus directly")
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__":
+            names = {arg.arg for arg in node.args.args + node.args.kwonlyargs}
+            assert "interface" not in names, f"{SIMULATOR_MODULE}:{node.lineno}"
+    assert opens and all(opens), opens  # at least one open, every one literally "virtual"
+    for use in _imports():
+        if use.file == SIMULATOR_MODULE:
+            assert use.module.split(".")[0] != "can", use
+
+
+def test_the_programmable_simulator_server_is_created_only_by_the_bench_link() -> None:
+    creators = []
+    for relative, tree in _package_trees():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "VirtualProgrammableEcuServer"
+            ):
+                creators.append(relative)
+    assert set(creators) <= PROGRAMMABLE_SERVER_CREATORS, creators
+
+
+def test_the_programmable_simulator_is_imported_only_by_the_bench_link() -> None:
+    importers = {
+        use.file for use in _imports() if use.module == f"{ROOT}.hardware.uds_sim_programmable"
+    }
+    assert importers <= PROGRAMMABLE_SERVER_CREATORS, importers
+
+
+def test_the_programmable_simulator_builds_answers_never_requests() -> None:
+    offenders = [
+        f"{SIMULATOR_MODULE}:{node.lineno}"
+        for node in ast.walk(_simulator_tree())
+        if _first_request_byte(node) in _BENCH_REQUEST_SIDS
+    ]
+    assert offenders == []
+    literals = [n for n in ast.walk(_simulator_tree()) if _first_request_byte(n) is not None]
+    assert literals  # the scan sees the module's answers
+
+
+def test_the_read_only_simulator_still_refuses_every_write_service() -> None:
+    from iran_obd_tuner.hardware.uds_sim import SimulatedUdsEcu
+
+    ecu = SimulatedUdsEcu()
+    for sid in sorted(WRITE_SIDS):
+        assert ecu.handle(bytes([sid, 0x01])) == [bytes([0x7F, sid, 0x11])], hex(sid)
