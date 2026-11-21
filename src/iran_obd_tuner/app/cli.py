@@ -15,6 +15,9 @@ Commands:
 * ``vehicles list|show|match`` - the read-only Iranian vehicle / ECU knowledge base: every
   claim with its confidence level and source; ``match`` ranks profiles against saved
   ``diagnose`` / ``uds-ident`` JSON (offline, nothing is sent to a vehicle).
+* ``bench inspect|table|demo`` - offline ROM file analysis (Phase 4): size, SHA-256, CRC32,
+  observed ASCII strings, map definitions, decoded tables and checksum status. Read-only:
+  editing and exporting a modified copy are dashboard-only; nothing is sent to any ECU.
 
 Output is ASCII English so that it stays readable in any terminal, in logs and in CI.
 Persian language output belongs to the future UI layer, not to the CLI.
@@ -35,11 +38,13 @@ from pathlib import Path
 
 from iran_obd_tuner import __title__, __version__
 from iran_obd_tuner.app.application import Application, uds_link_config
+from iran_obd_tuner.app.bench import AppBenchWorkspace
 from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings, load_settings
 from iran_obd_tuner.core.exceptions import (
     AdapterNotFoundError,
     ConfigurationError,
     IranObdTunerError,
+    RomError,
     VehicleKnowledgeError,
 )
 from iran_obd_tuner.core.knowledge import (
@@ -189,6 +194,33 @@ def build_parser() -> argparse.ArgumentParser:
     v_match.add_argument("--report", type=Path, default=None, metavar="PATH")
     v_match.add_argument("--uds", type=Path, default=None, metavar="PATH")
     v_match.add_argument("--json", action="store_true", help="print JSON")
+
+    bench = subparsers.add_parser(
+        "bench",
+        help="offline ROM file analysis (read-only; nothing is sent to any ECU)",
+    )
+    bench_commands = bench.add_subparsers(dest="bench_command", required=True)
+    b_inspect = bench_commands.add_parser(
+        "inspect", help="size, fingerprints, strings, maps and checksums of a ROM file"
+    )
+    b_inspect.add_argument("rom", type=Path, metavar="ROM", help="raw .bin dump")
+    b_inspect.add_argument("--maps", type=Path, default=None, metavar="DEFS", help="definitions")
+    b_inspect.add_argument(
+        "--strings", type=int, default=20, metavar="N", help="ASCII strings to show (default 20)"
+    )
+    b_inspect.add_argument(
+        "--min-string-length", type=int, default=6, metavar="L", help="minimum string length"
+    )
+    b_inspect.add_argument("--json", action="store_true", help="print JSON")
+    b_table = bench_commands.add_parser("table", help="print one decoded calibration table")
+    b_table.add_argument("rom", type=Path, metavar="ROM")
+    b_table.add_argument("--maps", type=Path, required=True, metavar="DEFS")
+    b_table.add_argument("--map", required=True, metavar="ID", dest="map_id")
+    b_table.add_argument("--json", action="store_true", help="print JSON")
+    b_demo = bench_commands.add_parser(
+        "demo", help="write the SIMULATED demo ROM and its definitions to a folder"
+    )
+    b_demo.add_argument("--output", type=Path, required=True, metavar="DIR")
     return parser
 
 
@@ -610,6 +642,147 @@ def _vehicles_match(kb: VehicleKnowledgeBase, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# --------------------------------------------------------------------------- #
+# bench (offline ROM analysis)
+# --------------------------------------------------------------------------- #
+
+ROM_INSPECTION_SCHEMA_VERSION = 1
+_OFFLINE_NOTE = "offline file analysis only - nothing is read from or written to any ECU"
+
+
+def _cmd_bench(args: argparse.Namespace, settings: AppSettings) -> int:
+    if args.bench_command == "demo":
+        return _bench_demo(args.output)
+    bench = AppBenchWorkspace(settings.output_dir)
+    if args.bench_command == "inspect":
+        return _bench_inspect(bench, args)
+    return _bench_table(bench, args)
+
+
+def _bench_demo(folder: Path) -> int:
+    from iran_obd_tuner.tuning.demo import (
+        DEMO_DEFINITIONS_NAME,
+        DEMO_ROM_NAME,
+        build_demo_rom,
+        demo_definitions_text,
+    )
+
+    targets = {folder / DEMO_ROM_NAME: build_demo_rom(), folder / DEMO_DEFINITIONS_NAME: None}
+    existing = [str(path) for path in targets if path.exists()]
+    if existing:
+        print(f"error: refusing to overwrite {', '.join(existing)}", file=sys.stderr)
+        return EXIT_USAGE
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / DEMO_ROM_NAME).write_bytes(build_demo_rom())
+    (folder / DEMO_DEFINITIONS_NAME).write_text(demo_definitions_text(), encoding="utf-8")
+    print(f"SIMULATED demo ROM written to {folder / DEMO_ROM_NAME} (not an ECU image)")
+    print(f"SIMULATED demo definitions written to {folder / DEMO_DEFINITIONS_NAME}")
+    return EXIT_OK
+
+
+def _bench_inspect(bench: AppBenchWorkspace, args: argparse.Namespace) -> int:
+    if args.strings < 0:
+        raise ConfigurationError("--strings must not be negative")
+    if args.min_string_length < 3:
+        raise ConfigurationError("--min-string-length must be at least 3")
+    summary = bench.open_rom(args.rom, min_string_length=args.min_string_length)
+    refused: str | None = None
+    if args.maps is not None:
+        try:
+            bench.load_definitions(args.maps)
+        except RomError as exc:
+            refused = str(exc)
+    scan = bench.strings()
+    assert scan is not None
+    definitions = bench.definitions()
+    compatibility = bench.compatibility()
+    maps = bench.maps()
+    checksums = bench.checksums()
+    if args.json:
+        payload = {
+            "kind": "rom_inspection",
+            "schema_version": ROM_INSPECTION_SCHEMA_VERSION,
+            "read_only": True,
+            "note": _OFFLINE_NOTE,
+            "rom": summary.as_dict(),
+            "strings": {**scan.as_dict(), "strings": scan.as_dict()["strings"][: args.strings]},
+            "definitions": None if definitions is None else definitions.as_dict(),
+            "definitions_refused": refused,
+            "compatibility": None if compatibility is None else compatibility.as_dict(),
+            "maps": [m.as_dict() for m in maps],
+            "checksums": [c.as_dict() for c in checksums],
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return EXIT_USAGE if refused else EXIT_OK
+    origin = "SIMULATED demo" if summary.simulated else "file"
+    print(f"ROM ({origin}): {summary.name} ({summary.size} bytes) - {_OFFLINE_NOTE}")
+    print(f"  sha256: {summary.sha256}")
+    print(f"  crc32:  {summary.crc32:08X}")
+    print(
+        f"  fill:   0x00 x{summary.zero_bytes} (longest run {summary.longest_zero_run}), "
+        f"0xFF x{summary.ff_bytes} (longest run {summary.longest_ff_run})"
+    )
+    shown = scan.strings[: args.strings]
+    print(
+        f"strings (observed only, no identification): {scan.total_found} found, "
+        f"showing {len(shown)}"
+    )
+    for item in shown:
+        print(f"  0x{item.offset:06X}  {item.text}")
+    if refused:
+        print(f"definitions REFUSED: {refused}")
+    elif definitions is None:
+        print("definitions: none (use --maps DEFS); checksums: NOT_CONFIGURED")
+    else:
+        label = "SIMULATED" if definitions.simulated else "user-supplied"
+        print(
+            f"definitions: {definitions.name} ({label}, confidence {definitions.confidence}) - "
+            f"{definitions.map_count} map(s), {definitions.checksum_count} checksum block(s)"
+        )
+        if compatibility is not None:
+            for warning in compatibility.warnings:
+                print(f"  warning: {warning}")
+        print("maps:")
+        for m in maps:
+            print(
+                f"  {m.id:<28} {m.category.value:<9} {m.rows}x{m.cols:<3} "
+                f"{m.data_type.value:<9} 0x{m.byte_offset:06X}  "
+                f"{m.min_physical:g}..{m.max_physical:g} {m.unit}"
+            )
+    print("checksums (valid = matches the configured algorithm; not proof any ECU accepts it):")
+    for c in checksums:
+        if c.block_id is None:
+            print("  NOT_CONFIGURED")
+            continue
+        data = c.as_dict()
+        print(
+            f"  {c.block_id:<20} {c.algorithm.value if c.algorithm else '-':<20} "
+            f"{data['range'][0]}..{data['range'][1]} @{data['checksum_offset']}  "
+            f"stored {data['stored']} computed {data['computed']}  {c.status.value.upper()}"
+        )
+    return EXIT_USAGE if refused else EXIT_OK
+
+
+def _bench_table(bench: AppBenchWorkspace, args: argparse.Namespace) -> int:
+    bench.open_rom(args.rom)
+    bench.load_definitions(args.maps)
+    table = bench.table(args.map_id)
+    if args.json:
+        payload = {"kind": "rom_table", "schema_version": ROM_INSPECTION_SCHEMA_VERSION}
+        payload.update(table.as_dict())
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return EXIT_OK
+    print(f"{table.map_id}: {table.names.en} [{table.unit}] {table.rows}x{table.cols}")
+    x_values = table.x_axis.values if table.x_axis else tuple(range(table.cols))
+    y_values = table.y_axis.values if table.y_axis else tuple(range(table.rows))
+    x_unit = table.x_axis.unit if table.x_axis else "col"
+    y_unit = table.y_axis.unit if table.y_axis else "row"
+    print(f"{y_unit + ' / ' + x_unit:>14} " + " ".join(f"{x:>9g}" for x in x_values))
+    for r, row in enumerate(table.current):
+        print(f"{y_values[r]:>14g} " + " ".join(f"{v:>9g}" for v in row))
+    return EXIT_OK
+
+
 def _cmd_diagnose(args: argparse.Namespace, settings: AppSettings) -> int:
     pids: tuple[str, ...] | None = None
     if args.pids:
@@ -683,7 +856,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_uds_ident(args, settings)
         if args.command == "vehicles":
             return _cmd_vehicles(args, settings)
-    except (ConfigurationError, AdapterNotFoundError, VehicleKnowledgeError) as exc:
+        if args.command == "bench":
+            return _cmd_bench(args, settings)
+    except (ConfigurationError, AdapterNotFoundError, VehicleKnowledgeError, RomError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except IranObdTunerError as exc:
