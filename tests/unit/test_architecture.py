@@ -317,3 +317,107 @@ def test_vehicle_packs_are_data_only() -> None:
     data = PACKAGE_DIR / "database" / "data" / "vehicles"
     names = sorted(p.name for p in data.iterdir() if p.is_file())
     assert names and all(name.endswith(".json") for name in names)
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 6: offline ROM analysis (Phase 4); Phase 5 stays locked
+# --------------------------------------------------------------------------- #
+
+#: Standard library modules that could reach a network, a process or native code.
+_TUNING_FORBIDDEN_STDLIB = {
+    "socket",
+    "ssl",
+    "subprocess",
+    "ctypes",
+    "urllib",
+    "http",
+    "ftplib",
+    "asyncio",
+}
+#: Calls that create, replace or delete files.
+_FILE_WRITE_CALLS = {
+    "write_text",
+    "write_bytes",
+    "replace",
+    "rename",
+    "unlink",
+    "touch",
+    "mkdir",
+    "NamedTemporaryFile",
+    "mkstemp",
+}
+FILE_WRITER = "tuning/rom_export.py"
+
+
+def test_tuning_uses_only_core_and_harmless_standard_library() -> None:
+    offenders = []
+    for use in _imports():
+        if use.layer != "tuning":
+            continue
+        top = use.module.split(".")[0]
+        first_party = _first_party_layer(use.module)
+        if first_party is not None:
+            if first_party not in {"core", "tuning"}:
+                offenders.append(f"{use.file}: {use.module}")
+        elif top not in sys.stdlib_module_names or top in _TUNING_FORBIDDEN_STDLIB:
+            offenders.append(f"{use.file}: {use.module}")
+    assert offenders == []
+
+
+def test_only_the_exporter_writes_files_in_tuning() -> None:
+    offenders = []
+    for path in sorted((PACKAGE_DIR / "tuning").rglob("*.py")):
+        relative = path.relative_to(PACKAGE_DIR).as_posix()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            writes = name in _FILE_WRITE_CALLS
+            if name == "open":
+                modes = list(node.args[1:2]) + [k.value for k in node.keywords if k.arg == "mode"]
+                writes = any(
+                    not (isinstance(m, ast.Constant) and set(str(m.value)) <= {"r", "b", "t"})
+                    for m in modes
+                )
+            if writes and relative != FILE_WRITER:
+                offenders.append(f"{relative}:{node.lineno} {name}")
+    assert offenders == []
+
+
+def test_the_exporter_scan_sees_its_writes() -> None:
+    text = (PACKAGE_DIR / FILE_WRITER).read_text(encoding="utf-8")
+    assert "NamedTemporaryFile" in text and ".replace(target)" in text
+
+
+def test_nothing_implements_an_ecu_calibration_writer() -> None:
+    definitions = []
+    for path in PACKAGE_DIR.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.FunctionDef) and node.name == "write_calibration":
+                definitions.append(path.relative_to(PACKAGE_DIR).as_posix())
+    assert definitions == ["tuning/interfaces.py"]  # the Protocol only
+
+
+def test_phase5_stays_locked_by_the_default_policy() -> None:
+    import pytest
+
+    from iran_obd_tuner.core.exceptions import SafetyGuardError
+    from iran_obd_tuner.core.safety import DEFAULT_POLICY, OperationClass
+    from iran_obd_tuner.tuning.interfaces import BenchSafetyChecklist, assert_write_allowed
+
+    assert not DEFAULT_POLICY.allows(OperationClass.CALIBRATION_WRITE)
+    everything_checked = BenchSafetyChecklist(**dict.fromkeys(BenchSafetyChecklist.__slots__, True))
+    assert everything_checked.is_satisfied
+    with pytest.raises(SafetyGuardError):
+        assert_write_allowed(everything_checked)
+
+
+def test_ui_never_imports_tuning() -> None:
+    offenders = [
+        f"{use.file}: {use.module}"
+        for use in _imports()
+        if use.layer == "ui" and _first_party_layer(use.module) == "tuning"
+    ]
+    assert offenders == []
+    assert "tuning" not in ALLOWED["ui"]

@@ -1,21 +1,26 @@
-"""Bench (off-vehicle) ECU tuning — interfaces and validation boundaries only.
+"""Bench (off-vehicle) ECU work: offline ROM file analysis and the write boundary.
 
-**Nothing in this package is implemented.** There is no ECU communication, no ROM reading,
-no checksum correction and no flashing here, and this scaffolding deliberately does not add
-any. What the package does provide is the boundary that future write-capable work must pass
-through:
+**Nothing in this package talks to an ECU.** There is no ECU communication, no ROM reading
+from an ECU, no security access and no flashing here.
 
-* :class:`CalibrationReader` — the read-only bench interface (reading a calibration image
-  from an ECU on the bench is allowed by the default safety policy);
-* :class:`BenchSafetyChecklist` and :func:`assert_write_allowed` — the preconditions a write
-  must satisfy, checked *before* anything is sent to an ECU;
-* :class:`CalibrationWriter` — the shape of the future writer, whose every implementation
-  must call :func:`assert_write_allowed` first.
+Implemented (Phase 4, Milestone 6 — offline file analysis only):
 
-Any future write-capable feature requires, in addition: documented evidence for the target
-ECU family (checksum algorithm, security access scheme, memory layout), controlled testing
-on a bench ECU, an explicit owner/developer approval, and an update of the capability tables
-in README.md. See docs/architecture.md, section "Safety boundary".
+* ``rom_loader.py`` — read-only loading of raw ``.bin`` dumps with size bounds, SHA-256 /
+  CRC32 fingerprints and observed ASCII strings (no identification is claimed);
+* ``map_definitions.py`` — validated map definition files with provenance (the project ships
+  no real ECU offsets; only the SIMULATED demo in ``demo.py`` / ``data/demo_maps.json``);
+* ``tables.py`` / ``workspace.py`` — table decoding, bounded editing on a working copy, undo /
+  redo and diffs; the loaded image itself is immutable;
+* ``checksum.py`` — exactly defined checksum algorithms; "valid" means "matches the configured
+  algorithm", never "an ECU accepts it";
+* ``rom_export.py`` — the only file writer: a modified copy goes to a *different* file with a
+  manifest, never over the source and never to an ECU.
+
+Still only a boundary (no implementation, Phase 5 stays locked):
+
+* :class:`CalibrationReader` / :class:`CalibrationWriter` — the shape of bench ECU access;
+* :class:`BenchSafetyChecklist` and :func:`assert_write_allowed` — the preconditions any
+  future ECU write must satisfy; the default safety policy refuses every write.
 
 Import rules for this package: ``core`` and the standard library only.
 """
