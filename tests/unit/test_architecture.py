@@ -407,6 +407,7 @@ def test_phase5_stays_locked_by_the_default_policy() -> None:
     from iran_obd_tuner.tuning.interfaces import BenchSafetyChecklist, assert_write_allowed
 
     assert not DEFAULT_POLICY.allows(OperationClass.CALIBRATION_WRITE)
+    assert not DEFAULT_POLICY.allows(OperationClass.BENCH_FLASH)
     everything_checked = BenchSafetyChecklist(**dict.fromkeys(BenchSafetyChecklist.__slots__, True))
     assert everything_checked.is_satisfied
     with pytest.raises(SafetyGuardError):
@@ -421,3 +422,232 @@ def test_ui_never_imports_tuning() -> None:
     ]
     assert offenders == []
     assert "tuning" not in ALLOWED["ui"]
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7a: bench flash contract (Phase 5) - mode, capabilities, read-only paths
+# --------------------------------------------------------------------------- #
+
+#: Modules of the existing read-only vehicle paths. Milestone 7 must not touch their
+#: guarantees: none of them may know about bench programming at all.
+READ_ONLY_PATH_MODULES = (
+    "hardware/base.py",
+    "hardware/can_bus.py",
+    "hardware/elm327.py",
+    "hardware/elm327_protocol.py",
+    "hardware/isotp.py",
+    "hardware/mock.py",
+    "hardware/registry.py",
+    "hardware/serial_ports.py",
+    "hardware/transport.py",
+    "hardware/uds.py",
+    "hardware/uds_link.py",
+    "hardware/uds_sim.py",
+)
+#: Files that may refer to ``OperationClass.BENCH_FLASH`` (planned files included; a file
+#: that does not exist yet simply has nothing to check).
+BENCH_FLASH_REFERENCES = {
+    "core/bench.py",
+    "tuning/flash_gate.py",
+    "hardware/bench_programmer.py",
+}
+#: capability -> the only module that may construct it (and import the mint token).
+CAPABILITY_MINTERS = {
+    "FlashAuthorization": "tuning/flash_gate.py",
+    "BackupReceipt": "tuning/backup_vault.py",
+}
+#: Port methods that change the ECU, and the capability parameters each must declare.
+CAPABILITY_PARAMETERS = {
+    "enter_programming_session": {"authorization": "FlashAuthorization"},
+    "unlock": {"authorization": "FlashAuthorization"},
+    "upload_region": {"authorization": "FlashAuthorization"},
+    "erase_region": {"authorization": "FlashAuthorization", "backup": "BackupReceipt"},
+    "download_region": {"authorization": "FlashAuthorization", "backup": "BackupReceipt"},
+    "check_memory": {"authorization": "FlashAuthorization"},
+    "hard_reset": {"authorization": "FlashAuthorization"},
+}
+#: Public surface of the read-only UDS client (Milestone 4); bench work must not widen it.
+UDS_CLIENT_PUBLIC = {
+    "diagnostic_session_control",
+    "extended_session",
+    "extended_session_allowed",
+    "in_extended_session",
+    "read_data_by_identifier",
+    "read_dtc_count",
+    "read_dtcs_by_status_mask",
+    "tester_present",
+}
+
+
+def _package_trees() -> list[tuple[str, ast.Module]]:
+    return [
+        (path.relative_to(PACKAGE_DIR).as_posix(), ast.parse(path.read_text(encoding="utf-8")))
+        for path in sorted(PACKAGE_DIR.rglob("*.py"))
+    ]
+
+
+def _bench_flash_references(tree: ast.AST) -> list[int]:
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "BENCH_FLASH"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "OperationClass"
+    ]
+
+
+def test_the_read_only_uds_client_is_not_widened() -> None:
+    from iran_obd_tuner.hardware.uds import (
+        ALLOWED_REQUESTS,
+        SID_SESSION_CONTROL,
+        SID_TESTER_PRESENT,
+    )
+
+    assert set(ALLOWED_REQUESTS) == {0x10, 0x3E, 0x22, 0x19}
+    sessions = ALLOWED_REQUESTS[SID_SESSION_CONTROL] or frozenset()
+    assert {sub & 0x7F for sub in sessions} == {0x01, 0x03}  # never 0x02 programming
+    assert ALLOWED_REQUESTS[SID_TESTER_PRESENT] == frozenset({0x00, 0x80})
+    tree = ast.parse((PACKAGE_DIR / "hardware" / "uds.py").read_text(encoding="utf-8"))
+    client = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "UdsClient"
+    )
+    public = {
+        item.name
+        for item in client.body
+        if isinstance(item, ast.FunctionDef) and not item.name.startswith("_")
+    }
+    assert public == UDS_CLIENT_PUBLIC
+
+
+def test_read_only_paths_know_nothing_about_bench_programming() -> None:
+    offenders = []
+    for relative, tree in _package_trees():
+        in_read_only_path = relative in READ_ONLY_PATH_MODULES or relative.startswith(
+            "diagnostics/"
+        )
+        if not in_read_only_path:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == f"{ROOT}.core.bench":
+                offenders.append(f"{relative}: imports core.bench")
+        if _bench_flash_references(tree):
+            offenders.append(f"{relative}: refers to BENCH_FLASH")
+    assert offenders == []
+
+
+def test_bench_flash_is_referenced_only_by_the_bench_modules() -> None:
+    offenders = [
+        f"{relative}:{line}"
+        for relative, tree in _package_trees()
+        if relative not in BENCH_FLASH_REFERENCES
+        for line in _bench_flash_references(tree)
+    ]
+    assert offenders == []
+    core = ast.parse((PACKAGE_DIR / "core" / "bench.py").read_text(encoding="utf-8"))
+    assert _bench_flash_references(core)  # the scan sees the real reference
+
+
+def test_bench_flash_mode_can_never_come_from_settings() -> None:
+    from dataclasses import fields as dataclass_fields
+
+    from iran_obd_tuner.core.config import FIELD_CASTERS, AppSettings
+
+    names = {item.name for item in dataclass_fields(AppSettings)} | set(FIELD_CASTERS)
+    assert not any("flash" in name or "bench" in name for name in names), names
+    for relative in ("core/config.py", "app/dashboard.py", "app/application.py"):
+        text = (PACKAGE_DIR / relative).read_text(encoding="utf-8")
+        assert "BENCH_FLASH" not in text and "bench_flash_policy" not in text, relative
+
+
+def test_capabilities_are_minted_only_by_their_minting_modules() -> None:
+    constructed: dict[str, list[str]] = {name: [] for name in CAPABILITY_MINTERS}
+    token_users = []
+    for relative, tree in _package_trees():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in CAPABILITY_MINTERS
+            ):
+                constructed[node.func.id].append(relative)
+            if isinstance(node, ast.ImportFrom) and any(a.name == "_MINT" for a in node.names):
+                token_users.append(relative)
+            if isinstance(node, ast.Attribute) and node.attr == "_MINT":
+                token_users.append(relative)
+    for capability, minter in CAPABILITY_MINTERS.items():
+        assert set(constructed[capability]) <= {minter}, (capability, constructed[capability])
+    assert set(token_users) <= set(CAPABILITY_MINTERS.values()), token_users
+
+
+def _capability_problems(cls: ast.ClassDef) -> list[str]:
+    problems = []
+    methods = {item.name: item for item in cls.body if isinstance(item, ast.FunctionDef)}
+    for name, required in CAPABILITY_PARAMETERS.items():
+        method = methods.get(name)
+        if method is None:
+            problems.append(f"{cls.name}.{name} is missing")
+            continue
+        keyword_only = {
+            arg.arg: ast.unparse(arg.annotation) if arg.annotation else None
+            for arg in method.args.kwonlyargs
+        }
+        for parameter, annotation in required.items():
+            if keyword_only.get(parameter) != annotation:
+                problems.append(f"{cls.name}.{name} needs keyword-only {parameter}: {annotation}")
+    return problems
+
+
+def test_port_methods_that_change_the_ecu_demand_capabilities() -> None:
+    tree = ast.parse((PACKAGE_DIR / "core" / "bench.py").read_text(encoding="utf-8"))
+    port = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "BenchProgrammerPort"
+    )
+    assert _capability_problems(port) == []
+
+
+def test_every_declared_bench_target_is_simulated() -> None:
+    """Belt and braces next to the runtime refusal: no source line declares a real target."""
+    declarations = []
+    for relative, tree in _package_trees():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "BenchTargetProfile"
+            ):
+                simulated = next((k.value for k in node.keywords if k.arg == "simulated"), None)
+                literal_true = isinstance(simulated, ast.Constant) and simulated.value is True
+                declarations.append((relative, literal_true))
+    assert declarations and all(ok for _relative, ok in declarations), declarations
+
+
+def test_ui_never_handles_bench_capabilities_or_the_policy() -> None:
+    forbidden = {
+        "_MINT",
+        "FlashAuthorization",
+        "BackupReceipt",
+        "bench_flash_policy",
+        "BenchProgrammerPort",
+    }
+    offenders = []
+    for relative, tree in _package_trees():
+        if not relative.startswith("ui/"):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == f"{ROOT}.core.bench":
+                offenders += [f"{relative}: {a.name}" for a in node.names if a.name in forbidden]
+    assert offenders == []
+
+
+def test_the_bench_contract_is_passive() -> None:
+    """core/bench.py describes bench work; it opens, writes and sends nothing."""
+    tree = ast.parse((PACKAGE_DIR / "core" / "bench.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            assert name not in _FILE_WRITE_CALLS | {"open", "send", "write"}, (name, node.lineno)
+        assert _first_request_byte(node) is None, getattr(node, "lineno", "?")

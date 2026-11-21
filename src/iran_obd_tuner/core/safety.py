@@ -36,6 +36,12 @@ class OperationClass(StrEnum):
     STATE_CHANGING = "state_changing"
     #: Writes ECU calibration/flash memory, e.g. bench remapping.
     CALIBRATION_WRITE = "calibration_write"
+    #: Reprograms an ECU **on the bench** (out of the vehicle): programming session, security
+    #: access, erase, download, reset. Only :func:`iran_obd_tuner.core.bench.
+    #: bench_flash_policy` grants it, from a complete human attestation, for one session;
+    #: never from a configuration file or an environment variable. In this build the only
+    #: bench target that can exist is simulated (see :mod:`iran_obd_tuner.core.bench`).
+    BENCH_FLASH = "bench_flash"
 
     @property
     def is_destructive(self) -> bool:

@@ -21,6 +21,7 @@ __all__ = [
     "AdapterNotFoundError",
     "AdapterNotImplementedError",
     "AdapterTimeoutError",
+    "BenchTargetNotQualifiedError",
     "ConfigurationError",
     "EvidenceExportError",
     "IranObdTunerError",
@@ -148,4 +149,12 @@ class SafetyGuardError(IranObdTunerError):
     vehicle state or writes ECU calibration data. This is an intentional refusal, not a
     technical failure: write-capable features are not implemented and require explicit
     developer/owner approval plus controlled, vehicle-specific validation.
+    """
+
+
+class BenchTargetNotQualifiedError(SafetyGuardError):
+    """A bench target that is not qualified for programming in this build was requested.
+
+    In this build only simulated bench targets exist; a real ECU needs a documented,
+    evidence-backed target profile and a separate owner approval first.
     """

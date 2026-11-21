@@ -257,6 +257,32 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
   - **`diagnose`:** PID بی‌پاسخ یا خراب در `unanswered_pids` (گزارش نسخه ۳) ثبت می‌شود و بقیه گزارش
     خوانده می‌شود؛ فقط قطع اتصال گزارش را متوقف می‌کند. `--no-live` هیچ PID سرویس ۰۱ نمی‌خواند.
   - روش اولین اتصال به سخت‌افزار و خودرو: [`field-validation-protocol.md`](field-validation-protocol.md).
+- **قرارداد فلش Bench (Milestone 7a، فاز ۵، فقط شبیه‌سازی):** `core/bench.py` کار Bench را فقط
+  *توصیف* می‌کند و هیچ چیزی ارسال یا روی دیسک نوشته نمی‌کند (تست AST). در این قرارداد:
+  - `OperationClass.BENCH_FLASH` فقط با `bench_flash_policy(attestation)` و از یک `BenchAttestation`
+    کامل ساخته می‌شود. این attestation تأیید انسانی است: ECU روی میز، منبع تغذیه پایدار با محدودیت
+    جریان، سیم‌کشی بررسی‌شده، تأیید صاحب پروژه، نام اپراتور و عبارت دقیق `BENCH FLASH`. سیاست فقط
+    برای یک جلسه و در کد ساخته می‌شود؛ تنظیمات و متغیر محیطی هیچ‌وقت به آن نمی‌رسند (تست AST) و
+    `DEFAULT_POLICY` آن را ندارد.
+  - دو capability وجود دارد: `FlashAuthorization` (مجوز تغییر حافظه برای یک target و یک تصویر مشخص)
+    و `BackupReceipt` (رسید پشتیبان تأییدشده؛ قفل «خواندن پیش از نوشتن»). هر دو فقط با یک توکن
+    خصوصی ساخته می‌شوند که هر کدام را فقط یک ماژول `tuning` اجازه دارد import کند
+    (`flash_gate.py` و `backup_vault.py`، در 7d). هر capability هنگام ساخت خودش را دوباره بررسی
+    می‌کند و با `check_for(...)` به target، تصویر، هویت ECU و نوع لینک بسته است.
+  - **هر `BenchTargetProfile` غیرشبیه‌سازی‌شده با `BenchTargetNotQualifiedError` (زیرکلاس
+    `SafetyGuardError`) رد می‌شود.** تنها target موجود `SIMULATED_BENCH_TARGET` است: یک ناحیه
+    ۶۴ KiB در چهار سکتور، به اندازه ROM نمایشی، با مقادیر ساختگی.
+  - `SeedKeyProvider` فقط یک interface است. هیچ الگوریتم واقعی در پروژه نیست، هیچ سازوکار
+    بارگذاری plugin وجود ندارد و هر کلید فقط یک بار امتحان می‌شود.
+  - متدهای `BenchProgrammerPort` که ECU را تغییر می‌دهند پارامتر keyword-only
+    `authorization: FlashAuthorization` دارند و erase/download علاوه بر آن `backup: BackupReceipt`
+    (تست AST روی امضاها).
+  - ماشین حالت ژورنال (`JOURNAL_TRANSITIONS`) یک‌جا تعریف شده است: هیچ مسیری از `pending` بدون
+    `backup_verified` به `erasing` نمی‌رسد، و ECU دست‌خورده هیچ‌وقت `aborted` (تمیز) نمی‌شود بلکه
+    `interrupted` (dirty) می‌شود.
+  - مسیرهای فقط‌خواندنی (`hardware/uds.py`، ELM327، ISO-TP، CAN، شبیه‌ساز فقط‌خواندنی و کل
+    `diagnostics`) نه `core.bench` را import می‌کنند و نه `BENCH_FLASH` را می‌شناسند. سطح عمومی
+    `UdsClient` و فهرست سفید آن قفل است (تست AST).
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -399,6 +425,12 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۵۱ | (پیش از آزمون میدانی) بازه مجاز timeoutها در تنظیمات؛ بیرون از بازه رد می‌شود، clamp نمی‌شود | timeout خیلی کوتاه آداپتور را وسط هر درخواست قطع می‌کند (رگبار درخواست روی باس)؛ خیلی بلند آداپتور مرده را پنهان می‌کند. رد صریح مانند ADR ۴۳ اشتباه را نشان می‌دهد | clamp خاموش |
 | ۵۲ | (پیش از آزمون میدانی) قطع‌کن مدار در `LiveDataSession` (۳ poll پیاپی بی‌پاسخ) با `VehicleSilentError` | با سوئیچ بسته روی خط K پاسخ‌ها `NO DATA` است و داشبورد تا ابد poll می‌کرد؛ منطق در لایه تشخیص است تا بدون Qt تست شود | شمارنده در `MainWindow` |
 | ۵۳ | (پیش از آزمون میدانی، تأیید صاحب پروژه) `AT PC` در فهرست سفید و ارسال آن هنگام قطع؛ `unanswered_pids` و گزارش نسخه ۳؛ `--no-live` | ELM327 تا وقتی از سوکت OBD برق دارد keep-alive خط K را ادامه می‌دهد؛ یک PID بی‌پاسخ نباید گزارش میدانی را از بین ببرد؛ اولین اجرا روی خودروی جدید باید کمترین ترافیک را داشته باشد | فقط بستن درگاه؛ شکست کل گزارش |
+| ۵۴ | (Milestone 7a، تأیید صاحب پروژه) Milestone 7 فقط با ECU شبیه‌سازی‌شده؛ `BenchTargetProfile` واقعی در زمان ساخت رد می‌شود | هیچ شاهدی از چیدمان حافظه، روتین‌ها یا الگوریتم seed-key هیچ ECU واقعی نداریم؛ مسیر واقعی بدون شاهد قابل تست نیست و خطرناک است | پرچم پیکربندی برای ECU واقعی |
+| ۵۵ | (Milestone 7a) کلاس عملیات جدید `BENCH_FLASH` به‌جای `CALIBRATION_WRITE` به‌همراه `bench_mode` | مرز روشن و قابل‌کنترل با AST؛ فقط `bench_flash_policy` از روی attestation کامل آن را می‌دهد | استفاده دوباره از `CALIBRATION_WRITE` |
+| ۵۶ | (Milestone 7a) capabilityهای `FlashAuthorization` و `BackupReceipt` با توکن خصوصی، اعتبارسنجی دوباره در زمان ساخت و استفاده، و فقط یک ماژول سازنده برای هر کدام | پایتون سازنده خصوصی ندارد؛ ترکیب توکن، تست AST و بررسی در زمان اجرا، دور زدن را به یک تصمیم آشکار تبدیل می‌کند | پرچم بولی `backup_done` |
+| ۵۷ | (Milestone 7a) قراردادها (`BenchProgrammerPort`، `SeedKeyProvider`) در `core` | `tuning` فقط `core` را import می‌کند و `hardware` باید port را پیاده کند؛ وارونه‌سازی وابستگی بدون شکستن قواعد لایه‌ها | import `hardware` در `tuning` |
+| ۵۸ | (Milestone 7a) `BenchAttestation` (تأیید انسانی) جدا از بررسی‌های ماشینی؛ `BenchSafetyChecklist` برای سازگاری می‌ماند | نرم‌افزار ولتاژ منبع یا میز کار را نمی‌بیند؛ پشتیبان و اعتبار ROM را خودش ثابت می‌کند، پس نباید آن‌ها را از کاربر بپرسد | یک چک‌لیست مخلوط |
+| ۵۹ | (Milestone 7a) `SeedKeyProvider` فقط interface؛ بدون الگوریتم واقعی و بدون سازوکار plugin | ساختن یا مهندسی معکوس الگوریتم سازنده ممنوع است (CLAUDE.md بخش ۶)؛ بارگذاری کد خارجی مسیر تزریق است | ورود provider از entry point |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
