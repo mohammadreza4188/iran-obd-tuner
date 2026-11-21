@@ -231,9 +231,30 @@ JSON گزارش می‌دهد (مثلاً `ikco.json: vehicles[0].variants[1].en
    بنویسید. تست `test_bundled_verified_claims_match_their_evidence` بررسی می‌کند که هش درست است، بسته
    شبیه‌سازی‌شده نیست و مقدار ادعا واقعاً در بسته مشاهده شده است.
 
-### د) قابلیت نوشتنی (فلش/کالیبراسیون)
+### هـ) تعریف نقشه برای میز کار ROM (فاز ۴)
 
-در این مرحله **مجاز نیست**. اگر تیم تصمیم گرفت، باید هم‌زمان با پیاده‌سازی:
+فایل تعریف نقشه (`schema: "iran-obd-tuner/map-definitions"`) را کاربر می‌دهد؛ پروژه فقط نمونه
+شبیه‌سازی‌شده `src/iran_obd_tuner/tuning/data/demo_maps.json` را دارد (برای شروع:
+`iran-obd-tuner bench demo --output output/demo`). قواعد:
+
+- هر فایل `provenance` دارد (`confidence` از M5؛ `verified` رد می‌شود چون پروژه شاهد میدانی برای چیدمان
+  نقشه ندارد) و `simulated` صریح است.
+- `target.rom_size` و `target.identifiers` (رشته ASCII در آفست مشخص) باید با ROM بخوانند، وگرنه فایل رد
+  می‌شود؛ `rom_sha256` فقط هشدار می‌دهد.
+- هر نقشه: `byte_offset`، `rows`/`cols` (حداکثر ۶۴)، `data_type` (`uint8`، `int8`، `uint16_le/be`،
+  `int16_le/be`)، `scale`/`offset` (مقدار فیزیکی = خام × scale + offset)، `unit`، `min`/`max` اختیاری،
+  `layout` (`row_major` پیش‌فرض)، محور `fixed` یا `rom`. جدول‌ها هم‌پوشانی ندارند؛ محورها می‌توانند مشترک باشند.
+- چک‌سام: `algorithm`، `start`/`end` (end انحصاری)، `checksum_offset`؛ اگر فیلد داخل بازه باشد از محاسبه
+  حذف می‌شود. تعریف دقیق هر الگوریتم در docstring `tuning/checksum.py` است.
+- آفست یا الگوریتم چک‌سام یک ECU واقعی را **بدون منبع مستند** اضافه نکنید.
+
+تست‌ها: `test_rom_loader.py`، `test_checksum.py` (مقادیر بررسی کاتالوگ CRC)، `test_map_definitions.py`
+(رد شدن با مسیر JSON)، `test_tables.py`، `test_rom_export.py` (منبع هرگز بازنویسی نمی‌شود)،
+`test_demo_rom.py`، `tests/integration/test_bench_cli.py` و تست‌های Bench در `test_gui_window.py`.
+
+### د) قابلیت نوشتنی روی ECU (فلش/کالیبراسیون)
+
+در این مرحله **مجاز نیست** (فاز ۵ قفل است؛ خروجی فایل در میز کار ROM نوشتن روی ECU نیست). اگر تیم تصمیم گرفت، باید هم‌زمان با پیاده‌سازی:
 تأیید صریح کارفرما، شواهد فنی خانواده ECU، عبور همه مسیرها از
 `tuning.interfaces.assert_write_allowed()`، مسیر پشتیبان‌گیری/بازگردانی و تست روی ECU Bench
 (دور از خودرو) انجام شود. اسکلت فعلی فقط مرز و پیش‌نیازها را تعریف کرده است.

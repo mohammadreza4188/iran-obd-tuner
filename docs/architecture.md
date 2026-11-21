@@ -28,7 +28,7 @@ diagnostics/   جریان تشخیص + سرویس داشبورد + مدل گزا
   ↑
 hardware/      قرارداد آداپتور + شبیه‌ساز + رجیستری          ← core
 database/      دیتابیس دانش (JSON) + داده‌های همراه          ← core
-tuning/        رابط‌های Bench و مرز ایمنی نوشتن              ← core
+tuning/        تحلیل آفلاین ROM + مرز ایمنی نوشتن روی ECU      ← core
 ui/            داشبورد PySide6 (برگ، هیچ لایه‌ای آن را import نمی‌کند)  ← core, diagnostics
   ↑
 core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC، ایمنی    ← فقط کتابخانه استاندارد
@@ -53,7 +53,10 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
   literal درخواست UDS با SID نوشتنی، فراخوانی `can.Bus` بدون `interface=` و ساخت سرور ECU
   شبیه‌سازی بیرون از `hardware/uds_link.py`. (Milestone 5) `vehicle_matcher.py` و
   `evidence_export.py` از `hardware` فقط `PROTOCOL_NAMES` را می‌گیرند (هیچ کلاینت یا آداپتوری)،
-  `database` هیچ فایلی نمی‌نویسد، و فهرست‌های سفید UDS/ELM327 گسترش نیافته‌اند.
+  `database` هیچ فایلی نمی‌نویسد، و فهرست‌های سفید UDS/ELM327 گسترش نیافته‌اند. (Milestone 6) `tuning`
+  فقط `core` و کتابخانه استاندارد بی‌خطر (بدون شبکه/subprocess/ctypes) را import می‌کند، فقط
+  `tuning/rom_export.py` فایل می‌نویسد، `ui` هرگز `tuning` را import نمی‌کند و هیچ `write_calibration`
+  پیاده‌سازی نمی‌شود.
 
 جدول کامل کاتالوگ مسیرها:
 
@@ -101,7 +104,15 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `diagnostics/vehicle_matcher.py` | `ObservedFacts`، `rank_candidates`، نرمال‌سازی پروتکل | پیاده‌شده (غیرفعال) |
 | `diagnostics/evidence_export.py` | بسته شواهد میدانی: پنهان‌سازی VIN، هش، ردیف‌های ارتقا | پیاده‌شده |
 | `ui/knowledge_view.py` | تب «پایگاه دانش خودرو» | پیاده‌شده |
-| `tuning/interfaces.py` | `CalibrationReader/Writer`, `BenchSafetyChecklist` | فقط قرارداد |
+| `tuning/interfaces.py` | `CalibrationReader/Writer`, `BenchSafetyChecklist` | فقط قرارداد (فاز ۵ قفل) |
+| `core/calibration.py` | نوع داده، دسته نقشه، الگوریتم/وضعیت چک‌سام، snapshotهای فقط‌خواندنی برای CLI/UI | پیاده‌شده |
+| `tuning/rom_loader.py` | `load_rom` (۱۶KiB–۸MiB، رد HEX/SREC)، `RomImage` تغییرناپذیر، رشته‌های ASCII، آمار پرشدگی | پیاده‌شده |
+| `tuning/map_definitions.py` | اعتبارسنج فایل تعریف نقشه (منبع، `verified` ممنوع) + `check_compatibility` | پیاده‌شده |
+| `tuning/tables.py`, `tuning/workspace.py` | decode/encode محدود، فرمان‌های Undo/Redo، diff، `RomWorkspace` | پیاده‌شده |
+| `tuning/checksum.py` | هفت الگوریتم با تعریف دقیق، بازه و حذف فیلد خودِ چک‌سام | پیاده‌شده |
+| `tuning/rom_export.py` | خروجی غیرمخرب + مانیفست (تنها نویسنده فایل در `tuning`) | پیاده‌شده |
+| `tuning/demo.py`, `tuning/data/demo_maps.json` | ROM نمایشی شبیه‌سازی‌شده و تعریف نقشه‌هایش | پیاده‌شده (شبیه‌سازی) |
+| `app/bench.py`, `ui/bench_view.py` | `AppBenchWorkspace` (پیاده‌سازی Protocol `BenchWorkspace`) و تب «میز کار ROM» | پیاده‌شده |
 | `app/cli.py`, `app/application.py` | CLI و سیم‌کشی | پیاده‌شده |
 | `app/dashboard.py` | `AppDashboardBackend`: انتخاب آداپتور برای حالت شبیه‌سازی/واقعی | پیاده‌شده |
 | `app/gui_main.py` | ورودی داشبورد (`iran-obd-tuner-gui`): تنظیمات + لاگ + backend | پیاده‌شده (نیازمند `[gui]`) |
@@ -210,6 +221,14 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
   `test_uds.py` (همه ۶۵۵۳۶ ترکیب SID/زیرتابع) و `test_architecture.py` (نبود literal درخواست با SID
   نوشتنی، نبود نام این سرویس‌ها بیرون از `uds.py`، صریح بودن `interface=` در `can.Bus`، import
   تنبل `can`/`isotp`/`udsoncan` فقط در `hardware`) این را قفل می‌کنند.
+- **میز کار ROM آفلاین (Milestone 6):** تحلیل فایل، نه عملیات روی ECU. تصویر بارگذاری‌شده `bytes`
+  تغییرناپذیر است و ویرایش روی یک کپی کاری انجام می‌شود. `tuning/rom_export.py` تنها نویسنده فایل در
+  `tuning` است (تست AST) و خروجی را رد می‌کند اگر: مقصد همان فایل اصلی باشد (هر املایی، symlink یا
+  hardlink)، تأیید کاربر نباشد، چیزی تغییر نکرده باشد، چک‌سام تعریف‌شده نامعتبر باشد، بایتی بیرون از
+  جدول‌ها و فیلدهای چک‌سام تغییر کرده باشد یا فایل اصلی روی دیسک عوض شده باشد. کنار هر خروجی یک
+  مانیفست با `validated_for_vehicle: false` نوشته می‌شود. «معتبر» برای چک‌سام فقط یعنی مطابق الگوریتم
+  تعریف‌شده. هیچ کلاسی `write_calibration` را پیاده نمی‌کند و `DEFAULT_POLICY` همچنان
+  `CALIBRATION_WRITE` را رد می‌کند (تست معماری).
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -338,6 +357,13 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۳۷ | (Milestone 5) الگوهای شماره قطعه/نسخه با glob (`fnmatchcase`)، نه regex | خوانا برای بازبین، بدون خطر ReDoS، کافی برای پیشوندها | regex کامل |
 | ۳۸ | (Milestone 5) پنهان‌سازی VIN در بسته شواهد پیش‌فرض و fail-closed؛ پاسخ درخواست‌های VIN (`0902`، `22 F1 90` و فریم‌های ISO-TP آن) کامل جایگزین می‌شود | VIN داده شخصی است؛ هگز آن در فریم‌های چندتایی پخش می‌شود و ماسک متنی کافی نیست | فقط ماسک متن ASCII |
 | ۳۹ | (Milestone 5) تطبیق غیرفعال با امتیاز نرمال‌نشده و سقف «ضعیف» برای تطبیق فقط پروتکل | نیمی از خودروها CAN 500k دارند؛ تطبیق پروتکل نباید شبیه شناسایی دیده شود | نرمال‌سازی روی سیگنال‌های موجود |
+| ۴۰ | (Milestone 6) مدل‌های مشترک در `core/calibration.py` و Protocol بدون Qt به نام `BenchWorkspace` در `ui/backend.py` که `app/bench.py` پیاده می‌کند | `ui` اجازه import از `tuning` ندارد (مانند ADR ۱۳)؛ CLI و UI یک مسیر مشترک دارند | import مستقیم `tuning` در `ui` |
+| ۴۱ | (Milestone 6) تعریف دقیق چک‌سام: `sum16_*` جمع کلمه‌های ۱۶ بیتی؛ CRC-16 از نوع CCITT-FALSE (IBM-3740) | نام‌هایی مثل SUM16 یا CRC16 بدون تعریف دقیق مبهم‌اند؛ مقدار بررسی کاتالوگ CRC تست می‌شود | جمع بایتی ذخیره‌شده در ۱۶ بیت، XMODEM/KERMIT |
+| ۴۲ | (Milestone 6) خروجی با چک‌سام نامعتبر رد می‌شود؛ تأیید صریح و مانیفست همیشه لازم است | فایلی که ممکن است با ابزار دیگری فلش شود نباید بی‌صدا ناسازگار یا بی‌سابقه باشد | هشدار و اجازه خروجی |
+| ۴۳ | (Milestone 6) هیچ clamp: مقدار خارج از min/max رد می‌شود و خطای کوانتش گزارش می‌شود | clamp خاموش، داده متفاوت از خواست کاربر می‌سازد | محدود کردن خودکار مقدار |
+| ۴۴ | (Milestone 6) جدول‌ها هم‌پوشانی ندارند؛ محورها مشترک و فقط‌خواندنی‌اند؛ فیلد چک‌سام روی جدول نمی‌افتد | ویرایش یک جدول نباید جدول دیگری را بی‌صدا تغییر دهد | اجازه هم‌پوشانی با هشدار |
+| ۴۵ | (Milestone 6) `simulated` فقط از منبع (سازنده ROM نمایشی)، نه از محتوا؛ فایل روی دیسک شبیه‌سازی‌شده فرض نمی‌شود | مانند ADR ۳۱: برچسب از منبع داده می‌آید | تشخیص از روی رشته سرآیند |
+| ۴۶ | (Milestone 6) بدون CLI برای ویرایش/خروجی؛ CLI فقط `inspect`، `table` و `demo` | تغییر ROM باید با تصمیم آگاهانه انسان در رابط کاربری باشد | `bench export` در CLI |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
@@ -411,6 +437,8 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 ## ۱۰. خارج از محدوده این نسخه
 
 - هر نوع نوشتن/فلش/Security Access
-- نقشه‌ها و تعاریف کالیبراسیون (A2L/DAMOS) — فاز ۴
+- خواندن ROM از ECU، فلش و بازگردانی (فاز ۵، قفل)؛ پارس A2L/DAMOS، Intel HEX/S-record و طرح‌های
+  چک‌سام چندبخشی/اختصاصی
+- تعریف نقشه یا آفست واقعی برای هر ECU خودروهای ایرانی (بدون شواهد مستند)
 - ارتقای خودکار ادعاها از روی بسته شواهد (ارتقا یک ویرایش بازبینی‌شده JSON است)
 - ضبط بلندمدت Live Data، چند-خودرویی، شبکه/همگام‌سازی ابری
