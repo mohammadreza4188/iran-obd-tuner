@@ -189,6 +189,72 @@ def make_uds_client(fake_can_bus):
     return build
 
 
+class IsoTpEcuResponder:
+    """ECU side of ISO-TP for :class:`FakeCanBus`, segmented requests included.
+
+    Unlike :class:`SimUdsResponder` it reassembles First Frame + Consecutive Frames sent by
+    the tester (answering the First Frame with a Flow Control), which bench programming
+    needs for TransferData. Any object with ``handle(request) -> list[responses]`` can be
+    served (the read-only simulator or the virtual programmable ECU).
+    """
+
+    def __init__(self, ecu, request_id: int = 0x7E0, response_id: int = 0x7E8) -> None:
+        self.ecu = ecu
+        self.request_id = request_id
+        self.response_id = response_id
+        self.pending_cfs: list = []
+        self._incoming: tuple[int, bytearray] | None = None  # (length, data so far)
+
+    def _pad(self, data: bytes):
+        from iran_obd_tuner.hardware.can_bus import CanFrame
+
+        return CanFrame(self.response_id, data + bytes([0xCC]) * (8 - len(data)))
+
+    def _encode(self, response: bytes) -> list:
+        if len(response) <= 7:
+            return [self._pad(bytes([len(response)]) + response)]
+        n = len(response)
+        frames = [self._pad(bytes([0x10 | (n >> 8), n & 0xFF]) + response[:6])]
+        rest, seq = response[6:], 1
+        while rest:
+            self.pending_cfs.append(self._pad(bytes([0x20 | seq]) + rest[:7]))
+            rest, seq = rest[7:], (seq + 1) & 0x0F
+        return frames
+
+    def _answer(self, request: bytes) -> list:
+        frames: list = []
+        for response in self.ecu.handle(request):
+            frames.extend(self._encode(response))
+        return frames
+
+    def __call__(self, frame) -> list:
+        if frame.arbitration_id != self.request_id or not frame.data:
+            return []
+        pci = frame.data[0] >> 4
+        if pci == 3:  # the tester's flow control releases our segmented answer
+            out, self.pending_cfs = self.pending_cfs, []
+            return out
+        if pci == 0:
+            return self._answer(frame.data[1 : 1 + (frame.data[0] & 0x0F)])
+        if pci == 1:
+            length = ((frame.data[0] & 0x0F) << 8) | frame.data[1]
+            self._incoming = (length, bytearray(frame.data[2:8]))
+            return [self._pad(b"\x30\x00\x00")]  # continue to send, no block limit, STmin 0
+        if pci == 2 and self._incoming is not None:
+            length, data = self._incoming
+            data.extend(frame.data[1 : 1 + min(7, length - len(data))])
+            if len(data) >= length:
+                self._incoming = None
+                return self._answer(bytes(data))
+        return []
+
+
+@pytest.fixture
+def iso_tp_ecu_responder():
+    """The :class:`IsoTpEcuResponder` class (conftest classes cannot be imported)."""
+    return IsoTpEcuResponder
+
+
 # --------------------------------------------------------------------------- #
 # ELM327: scripted serial transport (no hardware, no serial port)
 # --------------------------------------------------------------------------- #

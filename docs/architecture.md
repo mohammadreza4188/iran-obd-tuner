@@ -81,6 +81,8 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `hardware/uds.py` | `UdsClient` فقط‌خواندنی، فهرست سفید `check_request_allowed`، NRCها، decode DTC، `discover_ecus` | پیاده‌شده |
 | `hardware/uds_sim.py` | `SimulatedUdsEcu` قطعی + `VirtualBusEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
 | `hardware/uds_sim_programmable.py` | (Milestone 7b) `VirtualProgrammableEcu`: سمت ECU شبیه‌سازی‌شده برنامه‌ریزی Bench (فلش NOR، bootloader، seed-key با شمارنده تلاش و تأخیر، erase/checkMemory، دانلود/آپلود بلوکی)، `FaultPlan`، `SimulatedXorSeedKey` و `VirtualProgrammableEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
+| `hardware/bench_programmer.py` | (Milestone 7c) `BenchProgrammer`: **تنها ماژولی که درخواست برنامه‌ریزی می‌سازد**؛ فهرست سفید Bench (`check_bench_request`)، حلقه درخواست/پاسخ مستقل از `uds.py`، بررسی capability در اولین دستور هر متد، تکرار محدود `0x36` | پیاده‌شده (فقط شبیه‌ساز) |
+| `hardware/bench_link.py` | (Milestone 7c) `BenchLink`/`BenchLinkConfig`: فقط `virtual-sim-programmable` (باس virtual + ECU برنامه‌پذیر شبیه‌سازی‌شده)؛ هر رابط یا کانال دیگری رد می‌شود | پیاده‌شده (فقط شبیه‌ساز) |
 | `hardware/uds_link.py` | `UdsLink`/`UdsLinkConfig`: رابط CAN ← ISO-TP ← `UdsClient`؛ `virtual-sim` = باس مجازی + ECU شبیه‌سازی | پیاده‌شده |
 | `diagnostics/ecu_identification.py` | `read_ecu_identification` (DID و DTC مستقل، fallback جلسه Extended با opt-in)، `EcuIdentification`، `UdsIdentificationSession` | پیاده‌شده |
 | `ui/uds_view.py` | بخش «شناسایی ECU با UDS» در تب شناسایی | پیاده‌شده |
@@ -290,6 +292,31 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
     پارامتر `interface` ندارد و فقط `hardware/bench_link.py` (7c) اجازه دارد آن را بسازد یا import کند.
     `SimulatedUdsEcu` فقط‌خواندنی دست‌نخورده است و همچنان هر سرویس نوشتنی را `0x11` جواب می‌دهد.
     همه مقدارها ساختگی‌اند (`SIM-...`) و seed-key یک XOR منتشرشده (`"SIM!"`) است.
+  - **برنامه‌ریز Bench (Milestone 7c، فقط شبیه‌ساز):** `hardware/bench_programmer.py` **تنها**
+    ماژولی است که درخواستی با SID نوشتنی می‌سازد. چهار گارد AST این را تضمین می‌کنند: یکی literalها
+    را در کل پکیج اسکن می‌کند، یکی ثابت‌های `SID_*` با مقدار نوشتنی را فقط در `uds.py` و این ماژول
+    مجاز می‌داند، یکی بررسی می‌کند که تنها فراخوانی `send` داخل `_transmit` باشد و اولین دستور آن
+    `check_bench_request` باشد، و یکی بررسی می‌کند که اولین دستور هر متد تغییردهنده یک بررسی
+    capability باشد. ویژگی‌های این ماژول:
+    - **فهرست سفید Bench پیش‌فرض‌-رد است:** `0x10` 01/02/03، `0x11 01`، `0x22` (یک DID)، `0x27` فقط
+      سطح target، `0x31 01` فقط روتین‌های erase/check همان target، `0x34`/`0x35` فقط بدون فشرده‌سازی و
+      با ALFID `0x44`، `0x36`، `0x37` و `0x3E`. سرویس‌های `0x14`، `0x28`، `0x2E`، `0x2F`، `0x3D`،
+      `0x85` و `0x87` با نام رد می‌شوند.
+    - **رد آنچه شبیه‌سازی‌شده نیست:** سازنده bus یا target غیرشبیه‌سازی‌شده و target چندناحیه‌ای را رد
+      می‌کند، و `unlock` هم provider غیرشبیه‌سازی‌شده یا provider دیگری غیر از provider همان target را.
+    - **مجوز و تصویر:** اولین `FlashAuthorization` روی لینک pin می‌شود. داده دانلودشده باید دقیقاً
+      SHA-256 تصویر مجاز را داشته باشد.
+    - **هویت ECU:** erase و download به هویت خوانده‌شده روی همین لینک نیاز دارند. هویت application باید
+      با اثرانگشت پشتیبان یکی باشد. خواندن بعدی در bootloader این پیوند را ضعیف نمی‌کند و فقط
+      `hard_reset` آن را پاک می‌کند. هویت فقط-bootloader (بازیابی) پذیرفته می‌شود و پیوند پشتیبان با
+      ژورنال کار orchestrator است (7d).
+    - **تکرار محدود:** فقط بلوک `0x36` تکرار می‌شود، آن هم پس از timeout یا `0x21`: حداکثر ۲ بار برای هر
+      بلوک و ۸ بار در کل انتقال. با `0x70` تا `0x73` و `UdsNoTrafficError` انتقال فوراً قطع می‌شود و
+      SecurityAccess فقط یک بار امتحان می‌شود.
+    - **لاگ ترافیک:** در سطح درخواست است، نه فریم. برای `0x36` فقط سرآیند ثبت می‌شود و کلید پنهان می‌ماند.
+    - **لینک:** `hardware/bench_link.py` تنها سازنده programmer و سرور شبیه‌ساز است و فقط
+      `virtual-sim-programmable` با کانال `bench-sim-...` را می‌پذیرد. هر رابط یا کانال دیگری
+      `BenchTargetNotQualifiedError` می‌گیرد.
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -439,6 +466,10 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۵۸ | (Milestone 7a) `BenchAttestation` (تأیید انسانی) جدا از بررسی‌های ماشینی؛ `BenchSafetyChecklist` برای سازگاری می‌ماند | نرم‌افزار ولتاژ منبع یا میز کار را نمی‌بیند؛ پشتیبان و اعتبار ROM را خودش ثابت می‌کند، پس نباید آن‌ها را از کاربر بپرسد | یک چک‌لیست مخلوط |
 | ۵۹ | (Milestone 7a) `SeedKeyProvider` فقط interface؛ بدون الگوریتم واقعی و بدون سازوکار plugin | ساختن یا مهندسی معکوس الگوریتم سازنده ممنوع است (CLAUDE.md بخش ۶)؛ بارگذاری کد خارجی مسیر تزریق است | ورود provider از entry point |
 | ۶۰ | (Milestone 7b) ECU برنامه‌پذیر شبیه‌سازی‌شده: اعتبار برنامه فقط با checkMemory موفق روی کل فلش و تا وقتی CRC همان است؛ حالت پایدار (فلش، رکورد اعتبار، شمارنده کلید غلط) از RAM جداست؛ هر fault فقط یک بار رخ می‌دهد | همان رفتاری که bootloader واقعی دارد، بدون وابستگی به محتوای تصویر؛ قطع برق باید فلش نیمه‌نوشته و bootloader را باقی بگذارد؛ fault یک‌باره اجازه می‌دهد بازیابی بعدی به‌طور قطعی تست شود | CRC درون خود تصویر؛ fault دائمی |
+| ۶۱ | (Milestone 7c) `bench_programmer.py` تنها سازنده درخواست‌های نوشتنی، با فهرست سفید Bench پیش‌فرض‌-رد خودش و حلقه UDS مستقل؛ `uds.py` و ELM327 دست‌نخورده و قفل (تست AST) | یک نقطه واحد و قابل‌بررسی برای هر درخواست تغییردهنده؛ مسیر فقط‌خواندنی هیچ ریسکی از کار Bench نمی‌گیرد (تصمیم D5) | refactor به transport مشترک با `uds.py` |
+| ۶۲ | (Milestone 7c) گارد AST برای ثابت‌های `SID_*` با مقدار نوشتنی | اسکن literal فقط عدد را می‌دید و `bytes([SID_X, ...])` را نمی‌گرفت؛ این شکاف در 7c پیدا و بسته شد | فقط اسکن literal |
+| ۶۳ | (Milestone 7c) پیوند هویت: هویت application روی لینک با خواندن در bootloader ضعیف نمی‌شود و فقط reset آن را پاک می‌کند | تست نشان داد که بدون این قاعده، خواندن دوباره هویت در جلسه programming پشتیبان ECU دیگری را می‌پذیرفت | آخرین خواندن جایگزین قبلی |
+| ۶۴ | (Milestone 7c) فقط `0x36` تکرار می‌شود (timeout یا `0x21`، ۲ بار برای هر بلوک و ۸ بار برای هر انتقال)؛ SecurityAccess هرگز | تکرار بلوک با همان شمارنده ایمن است (ECU تکرار را تأیید می‌کند)؛ تکرار کلید شمارنده تلاش ECU را مصرف می‌کند و می‌تواند قفل ایجاد کند | تکرار عمومی همه درخواست‌ها |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)

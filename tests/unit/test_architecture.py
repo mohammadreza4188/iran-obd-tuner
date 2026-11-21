@@ -159,7 +159,12 @@ POLICY_MODULE = "hardware/uds.py"
 #: Milestone 7b: the virtual programmable ECU is the *answering* side of these services; it
 #: may name them, but (scanned below like every other module) never build a request.
 SIMULATOR_MODULE = "hardware/uds_sim_programmable.py"
-WRITE_SERVICE_NAME_MODULES = {POLICY_MODULE, SIMULATOR_MODULE}
+#: Milestone 7c: the bench programmer is the only module that may compose programming
+#: requests (behind its own default-deny allowlist and the capability checks).
+PROGRAMMER_MODULE = "hardware/bench_programmer.py"
+WRITE_SERVICE_NAME_MODULES = {POLICY_MODULE, SIMULATOR_MODULE, PROGRAMMER_MODULE}
+#: Modules that may build a request starting with a write service identifier.
+WRITE_REQUEST_MODULES = {POLICY_MODULE, PROGRAMMER_MODULE}
 
 
 def _first_request_byte(node: ast.AST) -> int | None:
@@ -191,12 +196,42 @@ def test_no_literal_request_starts_with_a_write_service() -> None:
     offenders = []
     for path in sorted(PACKAGE_DIR.rglob("*.py")):
         relative = path.relative_to(PACKAGE_DIR).as_posix()
-        if relative == POLICY_MODULE:
+        if relative in WRITE_REQUEST_MODULES:
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             first = _first_request_byte(node)
-            if first in WRITE_SIDS and relative.startswith(("hardware/", "diagnostics/", "app/")):
+            if first in WRITE_SIDS:  # Milestone 7c: the whole package, not only three layers
                 offenders.append(f"{relative}:{node.lineno}")
+    assert offenders == []
+
+
+def test_write_service_identifiers_are_named_only_where_requests_may_be_built() -> None:
+    """Closes the gap of the literal scan above: ``bytes([SID_X, ...])`` with a named constant.
+
+    A module-level ``SID_*`` constant holding a write service identifier may exist only in
+    the modules that are allowed to build such requests.
+    """
+    offenders = []
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        relative = path.relative_to(PACKAGE_DIR).as_posix()
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+                if isinstance(node, ast.AnnAssign)
+                else []
+            )
+            value = getattr(node, "value", None)
+            for target in targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id.startswith("SID_")
+                    and isinstance(value, ast.Constant)
+                    and value.value in WRITE_SIDS
+                    and relative not in WRITE_REQUEST_MODULES
+                ):
+                    offenders.append(f"{relative}:{node.lineno} {target.id}")
     assert offenders == []
 
 
@@ -734,3 +769,155 @@ def test_the_read_only_simulator_still_refuses_every_write_service() -> None:
     ecu = SimulatedUdsEcu()
     for sid in sorted(WRITE_SIDS):
         assert ecu.handle(bytes([sid, 0x01])) == [bytes([0x7F, sid, 0x11])], hex(sid)
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7c: the bench programmer is the single, gated writer (simulated only)
+# --------------------------------------------------------------------------- #
+
+LINK_MODULE = "hardware/bench_link.py"
+#: Who may import the bench link (the 7d wiring) - and nobody imports the programmer but it.
+BENCH_LINK_IMPORTERS = {"app/bench_flash.py"}
+_CAPABILITY_CHECKS = {"_check_authorization", "_check_capabilities"}
+
+
+def _class_named(relative: str, name: str) -> ast.ClassDef:
+    tree = ast.parse((PACKAGE_DIR / relative).read_text(encoding="utf-8"))
+    return next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
+
+
+def _first_real_statement(function: ast.FunctionDef) -> ast.stmt:
+    body = function.body
+    has_docstring = (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    )
+    return body[1] if has_docstring else body[0]
+
+
+def test_the_programmer_implements_the_port_signatures() -> None:
+    assert _capability_problems(_class_named(PROGRAMMER_MODULE, "BenchProgrammer")) == []
+
+
+def test_every_state_changing_method_checks_its_capabilities_first() -> None:
+    programmer = _class_named(PROGRAMMER_MODULE, "BenchProgrammer")
+    methods = {f.name: f for f in programmer.body if isinstance(f, ast.FunctionDef)}
+    problems = []
+    for name, required in CAPABILITY_PARAMETERS.items():
+        first = _first_real_statement(methods[name])
+        call = first.value if isinstance(first, ast.Expr) else None
+        func = getattr(call, "func", None)
+        ok = (
+            isinstance(call, ast.Call)
+            and isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+            and func.attr in _CAPABILITY_CHECKS
+        )
+        if ok and "backup" in required:
+            ok = func.attr == "_check_capabilities" and len(call.args) == 3
+        if not ok:
+            problems.append(f"BenchProgrammer.{name}: first statement is not a capability check")
+    assert problems == []
+
+
+def test_the_programmer_sends_only_through_its_allowlist_choke_point() -> None:
+    programmer = _class_named(PROGRAMMER_MODULE, "BenchProgrammer")
+    senders = []
+    for function in (f for f in programmer.body if isinstance(f, ast.FunctionDef)):
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send"
+            ):
+                senders.append(function.name)
+    assert senders == ["_transmit"], senders
+    transmit = next(
+        f for f in programmer.body if isinstance(f, ast.FunctionDef) and f.name == "_transmit"
+    )
+    first = _first_real_statement(transmit)
+    assert (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Call)
+        and isinstance(first.value.func, ast.Name)
+        and first.value.func.id == "check_bench_request"
+    ), "the allowlist check must come before anything is sent"
+
+
+def test_the_programmer_and_the_link_are_reachable_only_through_the_link() -> None:
+    importers: dict[str, set[str]] = {"bench_programmer": set(), "bench_link": set()}
+    constructed = []
+    for use in _imports():
+        for name in importers:
+            if use.module == f"{ROOT}.hardware.{name}":
+                importers[name].add(use.file)
+    for relative, tree in _package_trees():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "BenchProgrammer"
+            ):
+                constructed.append(relative)
+    assert importers["bench_programmer"] <= {LINK_MODULE}, importers
+    assert importers["bench_link"] <= BENCH_LINK_IMPORTERS, importers
+    assert set(constructed) <= {LINK_MODULE}, constructed
+    assert constructed  # the scan sees the real construction
+
+
+def test_the_bench_link_opens_only_the_virtual_bus() -> None:
+    tree = ast.parse((PACKAGE_DIR / LINK_MODULE).read_text(encoding="utf-8"))
+    opens = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "open"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "PythonCanBus"
+        ):
+            first = node.args[0] if node.args else None
+            opens.append(isinstance(first, ast.Constant) and first.value == "virtual")
+        assert not (isinstance(node, ast.Attribute) and node.attr == "Bus"), node.lineno
+    assert opens and all(opens), opens
+    from iran_obd_tuner.hardware.bench_link import BENCH_LINK_INTERFACES
+
+    assert BENCH_LINK_INTERFACES == ("virtual-sim-programmable",)
+
+
+def test_the_bench_allowlist_is_exactly_what_bench_programming_needs() -> None:
+    from iran_obd_tuner.hardware.bench_programmer import (
+        BENCH_ALLOWED_REQUESTS,
+        BENCH_FORBIDDEN_SERVICES,
+    )
+
+    assert set(BENCH_ALLOWED_REQUESTS) == {
+        0x10, 0x11, 0x22, 0x27, 0x31, 0x34, 0x35, 0x36, 0x37, 0x3E
+    }  # fmt: skip
+    assert set(BENCH_FORBIDDEN_SERVICES) == {0x14, 0x28, 0x2E, 0x2F, 0x3D, 0x85, 0x87}
+    assert not set(BENCH_ALLOWED_REQUESTS) & set(BENCH_FORBIDDEN_SERVICES)
+
+
+def test_the_read_only_paths_stay_locked_after_milestone_7c() -> None:
+    from iran_obd_tuner.hardware.elm327_protocol import _ALLOWED_OBD, ALLOWED_AT_COMMANDS
+
+    assert (
+        frozenset({"ATZ", "ATE0", "ATL0", "ATH0", "ATTP0", "ATDPN", "ATDP", "ATI", "ATRV", "ATPC"})
+        == ALLOWED_AT_COMMANDS
+    )
+    assert _ALLOWED_OBD.pattern == r"01[0-9A-F]{2}|02[0-9A-F]{2}00|03|07|0A|09[0-9A-F]{2}"
+    bench_modules = {
+        f"{ROOT}.hardware.bench_programmer",
+        f"{ROOT}.hardware.bench_link",
+        f"{ROOT}.hardware.uds_sim_programmable",
+    }
+    offenders = [
+        f"{use.file}: {use.module}"
+        for use in _imports()
+        if use.module in bench_modules
+        and (use.file in READ_ONLY_PATH_MODULES or use.layer in {"diagnostics", "ui"})
+    ]
+    assert offenders == []
