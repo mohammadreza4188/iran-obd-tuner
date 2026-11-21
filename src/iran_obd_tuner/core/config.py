@@ -100,15 +100,22 @@ def _as_optional_positive_float(raw: Any, field: str) -> float | None:
     return None if not text else _as_positive_float(text, field)
 
 
+#: Allowed range of ``command_timeout_s`` (seconds). Below the minimum every ELM327 reply
+#: would time out and the next request would interrupt the adapter (a burst of requests on
+#: the vehicle bus); above the maximum a stalled adapter blocks the session for too long.
+COMMAND_TIMEOUT_RANGE_S: tuple[float, float] = (0.5, 10.0)
+#: Allowed range of ``connect_timeout_s`` (seconds): reset and protocol search need a few
+#: seconds; more than a minute only hides a dead adapter.
+CONNECT_TIMEOUT_RANGE_S: tuple[float, float] = (5.0, 60.0)
+
+
 #: CAN interfaces for UDS identification. Kept in sync with
 #: ``iran_obd_tuner.hardware.uds_link.LINK_INTERFACES`` by a test (core imports no hardware).
 CAN_INTERFACE_CHOICES: tuple[str, ...] = (
     "virtual-sim",
     "slcan",
     "pcan",
-    "gs_usb",
     "kvaser",
-    "socketcan",
 )
 
 
@@ -215,8 +222,10 @@ class AppSettings:
         adapter: Registry name of the adapter to use (default ``"mock"``).
         serial_port: Port of a serial adapter; unset for the mock adapter.
         serial_baudrate: Baud rate for serial adapters (ELM327 clones commonly use 38400).
-        connect_timeout_s: Seconds to wait for a connection to be established.
-        command_timeout_s: Seconds to wait for a single request/response exchange.
+        connect_timeout_s: Seconds to wait for a connection to be established
+            (:data:`CONNECT_TIMEOUT_RANGE_S`: 5 to 60).
+        command_timeout_s: Seconds to wait for a single request/response exchange
+            (:data:`COMMAND_TIMEOUT_RANGE_S`: 0.5 to 10).
         live_data_pids: Service 01 parameters read by the diagnostic workflow.
         log_level: Logging level name.
         log_file: Optional log file; logs go to stderr when unset.
@@ -228,8 +237,9 @@ class AppSettings:
             :class:`iran_obd_tuner.diagnostics.dyno.VehicleParameters`.
         can_interface: CAN interface for UDS identification; ``virtual-sim`` (default) is
             the simulated ECU on python-can's virtual bus.
-        can_channel: Channel of a real CAN interface (``COM5``, ``PCAN_USBBUS1``, ``can0``).
-        can_bitrate: CAN bitrate in bit/s.
+        can_channel: Channel of a real CAN interface (``COM5``, ``PCAN_USBBUS1``, ``0``).
+        can_bitrate: CAN bitrate in bit/s (real interfaces: 250000 or 500000 only, checked
+            when the link is configured).
         uds_request_id / uds_response_id: 11-bit physical UDS identifiers (ISO 15765-4
             defaults; not verified for any specific vehicle).
         isotp_padding: ISO-TP padding byte, or ``None`` (``"none"`` in a file) for none.
@@ -270,6 +280,16 @@ class AppSettings:
             raise ConfigurationError("setting 'serial_baudrate' must be positive")
         if self.connect_timeout_s <= 0 or self.command_timeout_s <= 0:
             raise ConfigurationError("timeouts must be positive")
+        for name, (low, high) in (
+            ("command_timeout_s", COMMAND_TIMEOUT_RANGE_S),
+            ("connect_timeout_s", CONNECT_TIMEOUT_RANGE_S),
+        ):
+            value = getattr(self, name)
+            if not low <= value <= high:
+                raise ConfigurationError(
+                    f"setting {name!r} must be within {low:g}..{high:g} s, got {value:g} "
+                    "(out-of-range values are refused, not silently changed)"
+                )
         normalize_log_level(self.log_level)
         if self.can_interface not in CAN_INTERFACE_CHOICES:
             raise ConfigurationError(f"unsupported can_interface {self.can_interface!r}")

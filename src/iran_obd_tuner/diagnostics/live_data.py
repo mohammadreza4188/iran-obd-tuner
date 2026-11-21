@@ -11,7 +11,12 @@ Honesty rules implemented here:
   (unsupported, no answer, malformed response) and **no value** — never a fallback number;
 * a failed trouble code read raises instead of returning "no codes";
 * whether data is simulated comes from ``AdapterInfo.simulated`` and travels with every
-  :class:`LiveSnapshot`.
+  :class:`LiveSnapshot`;
+* circuit breaker: when :data:`SILENT_POLL_LIMIT` polls in a row bring no answer at all
+  (every parameter that was actually requested timed out or came back garbled - typically
+  the ignition was turned off or the adapter hung), :meth:`LiveDataSession.poll` raises
+  :class:`~iran_obd_tuner.core.exceptions.VehicleSilentError`, so the caller disconnects
+  instead of polling a silent vehicle forever.
 
 Not implemented here: freeze frames, pending/permanent trouble codes. The session is not
 thread-safe; the dashboard serialises all calls on one worker thread.
@@ -31,6 +36,7 @@ from iran_obd_tuner.core.exceptions import (
     ProtocolError,
     UnsupportedOperationError,
     UnsupportedPidError,
+    VehicleSilentError,
 )
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import VehicleInfo, utc_now
@@ -54,7 +60,16 @@ from iran_obd_tuner.diagnostics.service import (
 )
 from iran_obd_tuner.hardware.base import AdapterInfo, ObdAdapter
 
-__all__ = ["LiveDataSession", "LiveSnapshot", "PidReading", "PidStatus"]
+__all__ = ["SILENT_POLL_LIMIT", "LiveDataSession", "LiveSnapshot", "PidReading", "PidStatus"]
+
+#: Consecutive polls without a single answer before the session is treated as lost. With
+#: the dashboard's poll interval and a 2 s command timeout this is roughly 3 x (2 s per
+#: silent parameter) of silence - long enough to ride out one missed reply, short enough
+#: that a car whose ignition was switched off is released within seconds.
+SILENT_POLL_LIMIT = 3
+
+#: Readings that mean "a request went to the vehicle and nothing usable came back".
+_SILENT_STATUSES = frozenset({PidStatus.NO_RESPONSE, PidStatus.MALFORMED})
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +116,7 @@ class LiveDataSession:
         connect_timeout_s: Seconds to wait for the connection to be established.
         clock: Monotonic clock stamped on every reading (``PidReading.sampled_at_s``);
             injectable so the analytics can be tested deterministically.
+        silent_poll_limit: Circuit breaker threshold (see the module docstring).
     """
 
     def __init__(
@@ -110,12 +126,22 @@ class LiveDataSession:
         *,
         connect_timeout_s: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
+        silent_poll_limit: int = SILENT_POLL_LIMIT,
     ) -> None:
+        if silent_poll_limit < 1:
+            raise ValueError("silent_poll_limit must be at least 1")
         self._adapter = adapter
         self._knowledge = knowledge
         self._connect_timeout_s = connect_timeout_s
         self._clock = clock
+        self._silent_poll_limit = silent_poll_limit
+        self._silent_polls = 0
         self._log = get_logger("diagnostics.live_data")
+
+    @property
+    def silent_polls(self) -> int:
+        """Polls in a row that brought no answer at all (reset by any answer)."""
+        return self._silent_polls
 
     @property
     def adapter_info(self) -> AdapterInfo:
@@ -149,6 +175,7 @@ class LiveDataSession:
             AdapterError: On timeout, refusal or any other connection failure. The session
                 is left disconnected; there is no fallback to another adapter.
         """
+        self._silent_polls = 0
         self._adapter.connect(timeout_s=self._connect_timeout_s)
 
     def disconnect(self) -> None:
@@ -174,10 +201,31 @@ class LiveDataSession:
 
         Raises:
             AdapterConnectionError: If the connection is not open or was lost.
+            VehicleSilentError: When this is the ``silent_poll_limit``-th poll in a row in
+                which every requested parameter went unanswered (circuit breaker).
         """
         started = utc_now()
         readings = tuple(self._read_one(normalize_pid(pid)) for pid in pids)
+        self._update_breaker(readings)
         return LiveSnapshot(readings=readings, simulated=self.simulated, timestamp=started)
+
+    def _update_breaker(self, readings: Sequence[PidReading]) -> None:
+        if any(reading.status is PidStatus.OK for reading in readings):
+            self._silent_polls = 0
+            return
+        if not any(reading.status in _SILENT_STATUSES for reading in readings):
+            return  # nothing was sent (all unsupported): says nothing about the vehicle
+        self._silent_polls += 1
+        self._log.warning(
+            "poll %d/%d without any answer from the vehicle",
+            self._silent_polls,
+            self._silent_poll_limit,
+        )
+        if self._silent_polls >= self._silent_poll_limit:
+            raise VehicleSilentError(
+                f"{self._silent_polls} polls in a row without a single answer from the vehicle "
+                "(ignition turned off? adapter unplugged or hung?); polling stopped"
+            )
 
     def read_trouble_codes(self) -> tuple[TroubleCode, ...]:
         """Read and interpret the stored trouble codes (service 03).

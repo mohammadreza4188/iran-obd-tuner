@@ -5,9 +5,16 @@ The interface is always named explicitly:
 * ``virtual-sim`` - python-can's in-process ``virtual`` bus **plus** a
   :class:`~iran_obd_tuner.hardware.uds_sim.VirtualBusEcuServer` answering on it. Everything
   read over it is simulated and the link says so (:attr:`UdsLink.simulated`).
-* ``slcan``, ``pcan``, ``gs_usb``, ``kvaser``, ``socketcan`` - a real CAN interface on the
-  channel the user gave. There is no automatic channel probing and a failed real interface
+* ``slcan``, ``pcan``, ``kvaser`` - a real CAN interface on the channel the user gave, at
+  250 or 500 kbit/s only. There is no automatic channel probing and a failed real interface
   never falls back to the simulator.
+
+Before the first transmission on a real interface, :meth:`UdsLink.open` runs a listen-only
+probe (:meth:`~iran_obd_tuner.hardware.can_bus.PythonCanBus.probe`): an error frame or a
+bad controller status aborts before anything is sent. The probe result is kept
+(:attr:`UdsLink.probe`) and written to the traffic log; a silent bus does not confirm the
+bitrate, which the UDS client covers by aborting when its request goes unanswered on a bus
+that never delivered a frame.
 
 The extended session (``0x10 0x03``) is a code-level opt-in passed by the caller
 (``allow_extended_session``); it is not a configuration key.
@@ -19,8 +26,14 @@ import uuid
 from dataclasses import dataclass
 
 from iran_obd_tuner.core.exceptions import ConfigurationError
-from iran_obd_tuner.core.traffic import TrafficLog
-from iran_obd_tuner.hardware.can_bus import SUPPORTED_INTERFACES, PythonCanBus
+from iran_obd_tuner.core.traffic import Direction, TrafficLog
+from iran_obd_tuner.hardware.can_bus import (
+    LISTEN_PROBE_S,
+    SUPPORTED_INTERFACES,
+    BusProbe,
+    PythonCanBus,
+    check_bitrate,
+)
 from iran_obd_tuner.hardware.isotp import IsoTpChannel, IsoTpConfig
 from iran_obd_tuner.hardware.uds import (
     FUNCTIONAL_REQUEST_ID,
@@ -70,8 +83,7 @@ class UdsLinkConfig:
                 f"unsupported CAN interface {self.interface!r}; choose one of: "
                 + ", ".join(LINK_INTERFACES)
             )
-        if self.bitrate <= 0:
-            raise ConfigurationError("the CAN bitrate must be positive")
+        check_bitrate("virtual" if self.simulated else self.interface, self.bitrate)
         for name in ("request_id", "response_id"):
             value = getattr(self, name)
             if not 0 <= value <= _MAX_STANDARD_ID:
@@ -94,6 +106,8 @@ class UdsLink:
         allow_extended_session: Code-level opt-in for ``0x10 0x03`` (default off).
         traffic_log: Records every CAN frame (TX/RX) for the traffic panel.
         timing: UDS client timing.
+        probe_s: Seconds of the listen-only probe on a real interface (must be positive;
+            the simulated ECU is not probed).
     """
 
     def __init__(
@@ -103,11 +117,16 @@ class UdsLink:
         allow_extended_session: bool = False,
         traffic_log: TrafficLog | None = None,
         timing: UdsTiming | None = None,
+        probe_s: float = LISTEN_PROBE_S,
     ) -> None:
+        if probe_s <= 0:
+            raise ConfigurationError("the listen-only probe cannot be skipped (probe_s > 0)")
         self._config = config
         self._allow_extended = allow_extended_session
         self._traffic = traffic_log
         self._timing = timing or UdsTiming()
+        self._probe_s = probe_s
+        self._probe: BusProbe | None = None
         self._bus: PythonCanBus | None = None
         self._server: VirtualBusEcuServer | None = None
         self._client: UdsClient | None = None
@@ -128,6 +147,11 @@ class UdsLink:
         return self._channel
 
     @property
+    def probe(self) -> BusProbe | None:
+        """Listen-only probe of the last :meth:`open` (``None`` for the simulated ECU)."""
+        return self._probe
+
+    @property
     def adapter_name(self) -> str:
         return f"can:{self._config.interface}"
 
@@ -142,6 +166,8 @@ class UdsLink:
 
         Raises:
             ConfigurationError: A real interface without a channel.
+            AdapterConnectionError: The listen-only probe saw an error frame or a bad
+                controller status (nothing was transmitted).
             AdapterConnectionError: python-can missing or the interface cannot be opened.
         """
         if self._bus is not None:
@@ -161,8 +187,20 @@ class UdsLink:
         elif not cfg.channel:
             raise ConfigurationError(
                 f"a CAN channel is required for interface {cfg.interface!r} "
-                "(e.g. COM5 for slcan, PCAN_USBBUS1 for pcan, can0 for socketcan)"
+                "(e.g. COM5 for slcan, PCAN_USBBUS1 for pcan, 0 for kvaser)"
             )
+        else:
+            # Listen first: a wrong bitrate is detected before anything is transmitted.
+            self._probe = PythonCanBus.probe(
+                interface, cfg.channel, cfg.bitrate, duration_s=self._probe_s
+            )
+            if self._traffic is not None:
+                self._traffic.append(
+                    Direction.INFO,
+                    self._probe.describe(),
+                    adapter=self.adapter_name,
+                    simulated=False,
+                )
         receive_ids = tuple(sorted({cfg.response_id, *OBD_RESPONSE_IDS}))
         try:
             assert self._channel is not None

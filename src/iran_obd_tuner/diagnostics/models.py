@@ -33,8 +33,9 @@ __all__ = [
 ]
 
 #: Version of the JSON produced by :meth:`DiagnosticReport.as_dict`. 2 added
-#: ``dtc_categories``, ``monitor_status``, ``freeze_frame`` and per-code ``status``.
-REPORT_SCHEMA_VERSION = 2
+#: ``dtc_categories``, ``monitor_status``, ``freeze_frame`` and per-code ``status``;
+#: 3 added ``unanswered_pids`` (``skipped_pids`` now means "unsupported" only).
+REPORT_SCHEMA_VERSION = 3
 
 
 class PidStatus(StrEnum):
@@ -269,7 +270,9 @@ class DiagnosticReport:
         adapter: Adapter that produced the data, including whether it is a simulator.
         measurements: Decoded parameter values.
         supported_pids: Parameters the vehicle reports as supported.
-        skipped_pids: Requested parameters that were not answered.
+        skipped_pids: Requested parameters the vehicle does not support (nothing was sent).
+        unanswered_pids: Requested, supported parameters that timed out or came back
+            malformed; the rest of the report was still read.
         trouble_codes: Stored trouble codes with knowledge database descriptions.
         generated_at: When the report was assembled (aware UTC).
         duration_s: Wall clock duration of the diagnostic session.
@@ -287,6 +290,7 @@ class DiagnosticReport:
     measurements: tuple[Measurement, ...] = ()
     supported_pids: tuple[str, ...] = ()
     skipped_pids: tuple[str, ...] = ()
+    unanswered_pids: tuple[str, ...] = ()
     trouble_codes: tuple[TroubleCode, ...] = ()
     generated_at: datetime = field(default_factory=utc_now)
     duration_s: float = 0.0
@@ -326,6 +330,7 @@ class DiagnosticReport:
             "measurements": [m.as_dict() for m in self.measurements],
             "supported_pids": list(self.supported_pids),
             "skipped_pids": list(self.skipped_pids),
+            "unanswered_pids": list(self.unanswered_pids),
             "trouble_codes": [t.as_dict() for t in self.trouble_codes],
             "generated_at": self.generated_at.isoformat(),
             "duration_s": self.duration_s,

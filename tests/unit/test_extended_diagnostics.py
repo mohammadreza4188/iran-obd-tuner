@@ -141,10 +141,11 @@ def test_freeze_frame_can_be_skipped() -> None:
     assert _report(read_freeze_frame=False).freeze_frame is None
 
 
-def test_json_report_schema_version_2() -> None:
+def test_json_report_schema_version_3() -> None:
     payload = json.loads(json.dumps(_report().as_dict()))
 
-    assert payload["schema_version"] == REPORT_SCHEMA_VERSION == 2
+    assert payload["schema_version"] == REPORT_SCHEMA_VERSION == 3
+    assert payload["unanswered_pids"] == []  # 3: timeouts are listed apart from unsupported
     assert payload["monitor_status"]["mil_on"] is True
     assert payload["monitor_status"]["outcome"] == "ok"
     assert [c["status"] for c in payload["dtc_categories"]] == ["stored", "pending", "permanent"]

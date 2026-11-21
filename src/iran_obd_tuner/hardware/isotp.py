@@ -63,6 +63,11 @@ class IsoTpConfig:
         n_bs_s: Time to wait for a flow control after a First Frame or a block.
         n_cr_s: Time to wait for the next Consecutive Frame.
         max_wait_frames: Flow control "wait" frames accepted in a row (N_WFTmax).
+        max_restarts: Times a sender may abandon a segmented message and start over
+            within one :meth:`IsoTpChannel.recv` before it is refused.
+        max_message_s: Ceiling for reassembling one segmented message, however the sender
+            paces its Consecutive Frames (bounds a sender that drips frames just inside
+            N_Cr).
     """
 
     tx_id: int
@@ -74,12 +79,16 @@ class IsoTpConfig:
     n_bs_s: float = 1.0
     n_cr_s: float = 1.0
     max_wait_frames: int = 10
+    max_restarts: int = 3
+    max_message_s: float = 10.0
 
     def __post_init__(self) -> None:
         if self.padding is not None and not 0 <= self.padding <= 0xFF:
             raise ValueError("padding must be a byte")
         if not 0 <= self.block_size <= 0xFF or not 0 <= self.st_min <= 0xFF:
             raise ValueError("block_size and st_min must be bytes")
+        if self.max_restarts < 0 or self.max_message_s <= 0:
+            raise ValueError("max_restarts must be >= 0 and max_message_s positive")
 
 
 class IsoTpChannel:
@@ -101,10 +110,20 @@ class IsoTpChannel:
         self._sleep = sleep
         self._traffic = traffic_log
         self._adapter_name = adapter_name
+        self._frames_received = 0
 
     @property
     def config(self) -> IsoTpConfig:
         return self._config
+
+    @property
+    def frames_received(self) -> int:
+        """Frames received from :attr:`IsoTpConfig.rx_id` so far (any kind).
+
+        ``0`` after a request means the bus never delivered a single answer frame: the
+        wiring, the bitrate or the identifiers are wrong (see :class:`UdsClient`).
+        """
+        return self._frames_received
 
     # ------------------------------------------------------------------ framing helpers
     def _frame(self, arbitration_id: int, data: bytes) -> CanFrame:
@@ -138,6 +157,7 @@ class IsoTpChannel:
                 continue
             if not frame.data:
                 continue
+            self._frames_received += 1
             self._record(Direction.RX, frame)
             return frame
 
@@ -203,11 +223,19 @@ class IsoTpChannel:
 
         Returns ``None`` when no message starts within ``timeout_s``.
 
+        Bounded in time: a message must start before the deadline; a sender that abandons a
+        segmented message and starts over may do so :attr:`IsoTpConfig.max_restarts` times,
+        and only before that same deadline; reassembling one message never takes longer
+        than :attr:`IsoTpConfig.max_message_s`.
+
         Raises:
-            AdapterTimeoutError: If a segmented message stops arriving (N_Cr).
-            ProtocolError: On a wrong sequence number or a malformed frame.
+            AdapterTimeoutError: If a segmented message stops arriving (N_Cr), takes longer
+                than ``max_message_s``, or is restarted after the deadline.
+            ProtocolError: On a wrong sequence number, a malformed frame or too many
+                restarts.
         """
         deadline = self._clock() + timeout_s
+        restarts = 0
         frame = self._next_frame(deadline)
         while frame is not None:
             kind = frame.data[0] >> 4
@@ -220,7 +248,18 @@ class IsoTpChannel:
                 result = self.receive_segmented(frame)
                 if isinstance(result, bytes):
                     return result
-                frame = result  # the sender started over: process its new SF/FF
+                restarts += 1  # the sender started over: process its new SF/FF
+                if restarts > self._config.max_restarts:
+                    raise ProtocolError(
+                        f"ISO-TP: {self._config.rx_id:#x} restarted its message {restarts} "
+                        f"times (limit {self._config.max_restarts}); giving up"
+                    )
+                if self._clock() >= deadline:
+                    raise AdapterTimeoutError(
+                        f"ISO-TP: {self._config.rx_id:#x} restarted its message after the "
+                        f"{timeout_s:.1f}s deadline; giving up"
+                    )
+                frame = result
                 continue
             frame = self._next_frame(deadline)  # stray CF/FC frames are ignored
         return None
@@ -230,6 +269,10 @@ class IsoTpChannel:
 
         Sends the flow control frames. Returns the payload, or the new Single/First Frame if
         the sender started over (the caller then processes that frame instead).
+
+        The N_Cr timer restarts only on a valid Consecutive Frame: other frames from the
+        sender (e.g. stray flow controls) cannot keep the wait alive. The whole message is
+        bounded by :attr:`IsoTpConfig.max_message_s`.
         """
         if len(first.data) < 8:
             raise ProtocolError(f"ISO-TP: truncated first frame {first.format()}")
@@ -241,9 +284,16 @@ class IsoTpChannel:
         block_size = self._config.block_size
         self._send_flow_control()
         received_in_block = 0
+        message_deadline = self._clock() + self._config.max_message_s
+        cf_deadline = self._clock() + self._config.n_cr_s
         while len(buffer) < length:
-            frame = self._next_frame(self._clock() + self._config.n_cr_s)
+            frame = self._next_frame(min(cf_deadline, message_deadline))
             if frame is None:
+                if self._clock() >= message_deadline and cf_deadline > message_deadline:
+                    raise AdapterTimeoutError(
+                        f"ISO-TP: message not complete within {self._config.max_message_s:.1f}s; "
+                        f"got {len(buffer)} of {length} bytes"
+                    )
                 raise AdapterTimeoutError(
                     f"ISO-TP: consecutive frame {expected} not received within "
                     f"{self._config.n_cr_s:.1f}s (N_Cr); got {len(buffer)} of {length} bytes"
@@ -252,12 +302,13 @@ class IsoTpChannel:
             if kind in (_SF, _FF):
                 return frame  # the sender started over: abandon this message (ISO 15765-2)
             if kind != _CF:
-                continue
+                continue  # not a CF: ignored, and the N_Cr timer keeps running
             sequence = frame.data[0] & 0x0F
             if sequence != expected:
                 raise ProtocolError(
                     f"ISO-TP: consecutive frame {sequence} received, {expected} expected"
                 )
+            cf_deadline = self._clock() + self._config.n_cr_s
             buffer.extend(frame.data[1 : 1 + min(7, length - len(buffer))])
             expected = (expected + 1) & 0x0F
             received_in_block += 1

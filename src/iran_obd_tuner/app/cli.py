@@ -142,6 +142,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the vehicle identification request",
     )
+    diagnose.add_argument(
+        "--no-live",
+        action="store_true",
+        help="read no live (service 01) parameters: only the identification, PID 0101, the "
+        "trouble codes and freeze frame 00 (the least traffic; first step on a new vehicle)",
+    )
 
     uds = subparsers.add_parser(
         "uds-ident",
@@ -157,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--channel",
         default=None,
         metavar="NAME",
-        help="interface channel, e.g. COM5 (slcan), PCAN_USBBUS1 (pcan), can0 (socketcan)",
+        help="interface channel, e.g. COM5 (slcan), PCAN_USBBUS1 (pcan), 0 (kvaser)",
     )
     uds.add_argument("--bitrate", type=int, default=None, metavar="BPS", help="CAN bitrate")
     uds.add_argument(
@@ -333,7 +339,11 @@ def _render_report(report: DiagnosticReport) -> tuple[str, ...]:
                     lines.append(f"  {reading.pid}  {'-':<32} {'n/a':>10} ({reading.status})")
 
     if report.skipped_pids:
-        lines.append(f"parameters not answered: {', '.join(report.skipped_pids)}")
+        lines.append(f"parameters not supported: {', '.join(report.skipped_pids)}")
+    if report.unanswered_pids:
+        lines.append(
+            f"parameters not answered (timeout or malformed): {', '.join(report.unanswered_pids)}"
+        )
 
     if report.knowledge_source:
         authoritative = (report.knowledge_metadata or {}).get("authoritative", False)
@@ -785,7 +795,11 @@ def _bench_table(bench: AppBenchWorkspace, args: argparse.Namespace) -> int:
 
 def _cmd_diagnose(args: argparse.Namespace, settings: AppSettings) -> int:
     pids: tuple[str, ...] | None = None
-    if args.pids:
+    if args.no_live and args.pids:
+        raise ConfigurationError("--no-live and --pids cannot be combined")
+    if args.no_live:
+        pids = ()
+    elif args.pids:
         pids = tuple(normalize_pid(part) for part in args.pids.split(",") if part.strip())
         if not pids:
             raise ConfigurationError("--pids was given but contains no parameter identifier")

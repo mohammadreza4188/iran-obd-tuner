@@ -61,6 +61,12 @@ def test_read_only_commands_are_allowed(command: str) -> None:
         "10 02",  # UDS programming session
         "3E 00",
         "0100 0100",
+        "0100\n",  # fullmatch: a trailing newline is not passed through
+        "0100\r",
+        "03\n04",
+        "ATPC0",
+        "ATPP",
+        "ATWS",  # warm start: not needed, not allowed
         "",
     ],
 )
@@ -458,3 +464,11 @@ def test_fuel_trim_scaling() -> None:
     assert decode_pid_value("0106", b"\x80") == 0.0
     assert decode_pid_value("0107", b"\x00") == -100.0
     assert decode_pid_value("0106", b"\xff") == pytest.approx(99.22, abs=0.01)
+
+
+def test_protocol_close_is_the_only_new_at_command() -> None:
+    assert proto.check_command_allowed("AT PC") == "ATPC"
+    assert (
+        frozenset({"ATZ", "ATE0", "ATL0", "ATH0", "ATTP0", "ATDPN", "ATDP", "ATI", "ATRV", "ATPC"})
+        == proto.ALLOWED_AT_COMMANDS
+    )

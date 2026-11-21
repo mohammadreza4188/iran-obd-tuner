@@ -31,7 +31,7 @@ from iran_obd_tuner import __version__  # noqa: E402
 from iran_obd_tuner.app.dashboard import AppDashboardBackend  # noqa: E402
 from iran_obd_tuner.core.calibration import TableViewMode  # noqa: E402
 from iran_obd_tuner.core.config import AppSettings  # noqa: E402
-from iran_obd_tuner.core.exceptions import AdapterConnectionError  # noqa: E402
+from iran_obd_tuner.core.exceptions import AdapterConnectionError, AdapterTimeoutError  # noqa: E402
 from iran_obd_tuner.core.knowledge import ConfidenceLevel  # noqa: E402
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository  # noqa: E402
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession, LiveSnapshot  # noqa: E402
@@ -324,6 +324,28 @@ def test_lost_connection_disconnects_cleanly(window: MainWindow, backend: TestBa
     assert window.connected is False
     assert window.timer.isActive() is False
     assert any("simulated cable unplug" in text for text in _log_texts(window))
+
+
+class IgnitionOffAdapter(MockObdAdapter):
+    """Connects, then never answers a measurement again (ignition switched off)."""
+
+    def read_measurement(self, pid: str):  # type: ignore[override]
+        raise AdapterTimeoutError("NO DATA")
+
+
+def test_ignition_off_trips_the_breaker_and_disconnects_with_a_clear_message(
+    window: MainWindow, backend: TestBackend, warnings_shown: list[str]
+) -> None:
+    backend.adapter_factory = IgnitionOffAdapter
+    window.lang_combo.setCurrentIndex(1)
+    _connect_simulation(window)
+
+    wait_until(lambda: not window.connected, timeout_s=10.0)
+    settle(window)
+
+    assert window.timer.isActive() is False
+    assert warnings_shown == [COPY["en"]["vehicle_silent"]]
+    assert any("Ignition turned off?" in text for text in _log_texts(window))
 
 
 def test_clear_codes_is_refused_and_explained_without_blocking(

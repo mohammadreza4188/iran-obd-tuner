@@ -51,11 +51,11 @@
 | Freeze Frame شماره ۰۰ (سرویس ۰۲): کد عامل و ۸ پارامتر؛ پارامتر ذخیره‌نشده با «—» | `src/iran_obd_tuner/diagnostics/service.py`, `ui/diagnostics_view.py` |
 | نمایشگر ترافیک خام آداپتور (TX/RX) در زیرتب «رویدادها»، با توقف نمایش، پاک کردن و کپی؛ بافر محدود و ایمن برای چند thread. شبیه‌ساز فقط درخواست و مقدار decodeشده را با برچسب «شبیه‌سازی» ثبت می‌کند، نه فریم هگز ساختگی | `src/iran_obd_tuner/core/traffic.py`, `ui/traffic_view.py` |
 | تب «عملکرد»: زمان‌سنج ۰ تا ۱۰۰ (با زمان ۰ تا ۶۰، مسافت و **عدم‌قطعیت اعلام‌شده**) و دینوی مجازی (توان و گشتاور **تخمینی** از یک کشش با دریچه گاز کامل). هر دو کاملاً غیرفعال‌اند و فقط داده poll موجود را می‌خوانند؛ «poll سریع» هنگام اندازه‌گیری فقط دور، سرعت و دریچه گاز را می‌خواند (دستور کمتر، نه بیشتر) | `src/iran_obd_tuner/diagnostics/performance.py`, `diagnostics/dyno.py`, `ui/performance_view.py` |
-| **لایه CAN و ISO-TP (ISO 15765-2) خودِ پروژه** روی python-can (اختیاری، `[can]`): رابط‌های `slcan`، `pcan`، `gs_usb`، `kvaser`، `socketcan` و باس مجازی؛ Single/First/Consecutive Frame، Flow Control (BS، STmin، Wait)، padding، timeoutهای N_Bs/N_Cr. نام رابط همیشه صریح است — **روی رابط CAN واقعی اعتبارسنجی نشده** | `src/iran_obd_tuner/hardware/can_bus.py`, `isotp.py` |
+| **لایه CAN و ISO-TP (ISO 15765-2) خودِ پروژه** روی python-can (اختیاری، `[can]`): رابط‌های `slcan`، `pcan`، `kvaser` و باس مجازی؛ Single/First/Consecutive Frame، Flow Control (BS، STmin، Wait)، padding، timeoutهای N_Bs/N_Cr، سقف شروع مجدد و سقف زمان کل پیام. نام رابط همیشه صریح است؛ رابط واقعی فقط با ۲۵۰ یا ۵۰۰ kbit/s و پس از **آزمون فقط‌شنود (listen-only)** باز می‌شود — **روی رابط CAN واقعی اعتبارسنجی نشده** | `src/iran_obd_tuner/hardware/can_bus.py`, `isotp.py` |
 | **کلاینت UDS (ISO 14229-1) فقط‌خواندنی:** `0x10` فقط ۰۱/۰۳، `0x3E`، `0x22` و `0x19` (۰۱/۰۲)، با فهرست سفید سخت‌کد که سرویس‌های نوشتن/امنیت/برنامه‌ریزی (`0x11`، `0x14`، `0x27`، `0x2E`، `0x2F`، `0x31`، `0x34` تا `0x37` و چند سرویس دیگر) و جلسه برنامه‌ریزی `0x02` را همیشه رد می‌کند؛ مدیریت NRC (`0x78` با سقف، `0x21`، `0x31`، `0x33`، `0x22`) | `src/iran_obd_tuner/hardware/uds.py` |
 | شناسایی ECU با UDS: DIDهای استاندارد `F190` (VIN)، `F187`، `F189`، `F191`، `F197` و کدهای خطای UDS، هر کدام با وضعیت مستقل؛ جلسه Extended فقط با انتخاب صریح کاربر و همیشه با بازگشت به `0x10 0x01`؛ جستجوی ECU با `3E 00` روی `0x7DF` فقط با کلیک کاربر | `src/iran_obd_tuner/diagnostics/ecu_identification.py`, `ui/uds_view.py` |
 | ECU شبیه‌سازی‌شده قطعی روی باس مجازی python-can (`virtual-sim`)، با برچسب «شبیه‌سازی» در CLI، JSON، رابط کاربری و ترافیک | `src/iran_obd_tuner/hardware/uds_sim.py`, `uds_link.py` |
-| گزارش JSON نسخه ۲ (`schema_version: 2`) با `monitor_status`، `dtc_categories` و `freeze_frame` | `src/iran_obd_tuner/diagnostics/models.py` |
+| گزارش JSON نسخه ۳ (`schema_version: 3`) با `monitor_status`، `dtc_categories`، `freeze_frame` و `unanswered_pids` (PIDهایی که پاسخ ندادند جدا از PIDهای پشتیبانی‌نشده) | `src/iran_obd_tuner/diagnostics/models.py` |
 | خواندن داده در thread پس‌زمینه (رابط کاربری هنگام جستجوی پروتکل قفل نمی‌شود) | `src/iran_obd_tuner/ui/worker.py` |
 | دیتابیس دانش JSON (زیرمجموعه عمومی کدهای خطا) | `src/iran_obd_tuner/database/` |
 | **پایگاه دانش خودروها و ECUهای بازار ایران (Milestone 5):** هر ادعا سطح اطمینان (`verified` / `documented` / `reported` / `unverified` / `unknown`) و منبع قابل ردیابی دارد؛ بسته‌های JSON برای ایران‌خودرو (پژو پارس TU5/XU7، پژو ۲۰۶ تیپ ۲/۵، سمند و دنا EF7)، سایپا (پراید، تیبا، ساینا، کوییک) و ام‌وی‌ام (۳۱۵، X22) با اعتبارسنج سخت‌گیر. **همه پروتکل‌ها، شناسه‌های CAN و خانواده‌های ECU «نامعلوم»‌اند** تا شواهد میدانی برسد | `core/knowledge.py`, `database/vehicle_schema.py`, `database/vehicles.py`, `database/data/vehicles/` |
@@ -148,7 +148,15 @@ declared adapters: 3 (1 implemented)
   فهرست درگاه‌ها با یک ماژول pyserial جعلی و آداپتور ELM327 با یک transport اسکریپتی تست می‌شود.
 - آداپتور ELM327 یک **فهرست سفید دستور** دارد: فقط دستورهای AT پیکربندی و سرویس‌های OBD `01`، `03` و `09`
   ارسال می‌شوند. سرویس ۰۴، ۰۸، دستورهای UDS و `AT SP` (که EEPROM آداپتور را می‌نویسد) پیش از ارسال رد
-  می‌شوند. برای جستجوی پروتکل از `AT TP 0` استفاده می‌شود که چیزی در آداپتور ذخیره نمی‌کند.
+  می‌شوند. برای جستجوی پروتکل از `AT TP 0` استفاده می‌شود که چیزی در آداپتور ذخیره نمی‌کند. هنگام قطع
+  اتصال `AT PC` (Protocol Close، فقط سمت آداپتور) فرستاده می‌شود تا پیام‌های keep-alive خط K به ECU قطع
+  شود؛ این دستور فقط به دستگاهی فرستاده می‌شود که خود را ELM327 معرفی کرده است.
+- **همه انتظارها محدودند (پیش از آزمون میدانی سخت‌گیرانه‌تر شد):** نوشتن روی درگاه سریال حداکثر ۱ ثانیه
+  (`write_timeout`، بدون `flush()` نامحدود pyserial در ویندوز)؛ `command_timeout_s` فقط ۰٫۵ تا ۱۰ و
+  `connect_timeout_s` فقط ۵ تا ۶۰ ثانیه (مقدار بیرون از بازه رد می‌شود)؛ اگر داشبورد سه بار پیاپی هیچ
+  پاسخی از خودرو نگیرد (مثلاً سوئیچ بسته شد) ارسال را متوقف و اتصال را قطع می‌کند؛ در `diagnose` بی‌پاسخ
+  ماندن یک PID کل گزارش را خراب نمی‌کند. روش آزمون میدانی:
+  [`docs/field-validation-protocol.md`](docs/field-validation-protocol.md).
 - درگاه سریال **هرگز خودکار جستجو نمی‌شود**؛ کاربر باید آن را صریحاً انتخاب کند تا فرمانی به دستگاه ناشناخته
   ارسال نشود. اگر دستگاه روی درگاه به `ATZ` به‌عنوان ELM327 پاسخ ندهد، هیچ فرمان دیگری ارسال نمی‌شود.
 - انتخاب «آداپتور واقعی» در داشبورد **هرگز** بی‌صدا به شبیه‌ساز تبدیل نمی‌شود؛ اگر اتصال شکست بخورد،
@@ -160,7 +168,11 @@ declared adapters: 3 (1 implemented)
   Extended (`0x10 0x03`) پیش‌فرض خاموش است، در تنظیمات و متغیر محیطی **وجود ندارد**، فقط با چک‌باکس
   رابط کاربری یا `--extended-session` برای همان اجرا فعال می‌شود و ECU همیشه به `0x10 0x01` برمی‌گردد.
   تست‌های AST وجود نداشتن درخواست نوشتنی را در کد بررسی می‌کنند. هنگام کار با رابط واقعی: سوئیچ باز،
-  موتور خاموش، خودرو متوقف.
+  موتور خاموش، خودرو متوقف. رابط CAN واقعی فقط `slcan`، `pcan` یا `kvaser` است (درایور python-can برای
+  `gs_usb` و `socketcan` حالت listen-only ندارد)، فقط با ۲۵۰۰۰۰ یا ۵۰۰۰۰۰ bit/s، و پیش از اولین ارسال
+  یک ثانیه فقط گوش می‌دهد: فریم خطا یا وضعیت خطای کنترلر یعنی توقف بدون هیچ ارسالی. اگر اولین درخواست
+  بی‌پاسخ بماند و باس هیچ فریمی تحویل نداده باشد، جلسه فوراً و بدون تکرار قطع می‌شود؛ P2* اعلام‌شده
+  ECU حداکثر ۱۰ ثانیه پذیرفته می‌شود.
 - پیش‌نیازهای هر نوشتن آینده در `tuning/interfaces.py` (`BenchSafetyChecklist`) فهرست شده‌اند.
 - **میز کار ROM (فاز ۴) فقط روی فایل کار می‌کند:** فایل اصلی فقط خوانده می‌شود و در حافظه تغییرناپذیر
   است؛ خروجی اصلاح‌شده فقط به مسیر دیگری نوشته می‌شود (با تأیید صریح، چک‌سام معتبر و مانیفست). این
@@ -223,6 +235,7 @@ iran-obd-tuner diagnose     # یک جلسه تشخیص فقط‌خواندنی �
 iran-obd-tuner diagnose --json --output output/report.json
 iran-obd-tuner diagnose --pids 010C,010D,0105 --adapter mock
 iran-obd-tuner diagnose --adapter elm327 --port COM3   # آداپتور واقعی، فقط‌خواندنی
+iran-obd-tuner diagnose --adapter elm327 --port COM3 --no-live   # بدون Live Data: کمترین ترافیک (گام اول روی خودروی جدید)
 iran-obd-tuner uds-ident --discover                    # شناسایی UDS با ECU شبیه‌سازی‌شده (نیازمند [can])
 iran-obd-tuner uds-ident --json --output output/ecu.json
 iran-obd-tuner uds-ident --interface slcan --channel COM5 --bitrate 500000   # رابط واقعی، فقط‌خواندنی
@@ -291,7 +304,7 @@ iran-obd-tuner/
 ├─ tests/                            unit/ ، integration/ (CLI + GUI)، fixtures/ (شامل بسته خودروی ساختگی آزمایشی)
 ├─ evidence/                         بسته‌های شواهد میدانی بازبینی‌شده که ادعاهای verified به آن‌ها ارجاع می‌دهند
 ├─ config/example.toml               نمونه پیکربندی (کپی به config/local.toml)
-├─ docs/                             idea-report.md، architecture.md، development.md
+├─ docs/                             idea-report.md، architecture.md، development.md، field-validation-protocol.md
 ├─ scripts/check.py                  اجرای گیت‌های کیفیت به‌صورت یکجا
 ├─ .github/                          CI و قالب Pull Request
 ├─ pyproject.toml                    متادیتا، extras، نقاط ورود، تنظیمات pytest/ruff
@@ -314,6 +327,7 @@ iran-obd-tuner/
 
 - [`docs/architecture.md`](docs/architecture.md) — لایه‌ها، قواعد وابستگی، مرز ایمنی، نقاط توسعه
 - [`docs/development.md`](docs/development.md) — راه‌اندازی محیط، تست، افزودن آداپتور/PID، عیب‌یابی
+- [`docs/field-validation-protocol.md`](docs/field-validation-protocol.md) — روش ایمن اولین اتصال به آداپتور و خودروی واقعی
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — شاخه، کامیت، Pull Request، بازبینی
 - [`docs/idea-report.md`](docs/idea-report.md) — سند مفهومی و نقشه راه محصول
 - [`docs/ai-assistant-rules.md`](docs/ai-assistant-rules.md) — قواعد پروژه برای دستیارهای هوش مصنوعی

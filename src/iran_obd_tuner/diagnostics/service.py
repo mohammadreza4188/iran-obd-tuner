@@ -21,7 +21,7 @@ from iran_obd_tuner.core.exceptions import (
     UnsupportedPidError,
 )
 from iran_obd_tuner.core.logging import get_logger
-from iran_obd_tuner.core.models import VehicleInfo
+from iran_obd_tuner.core.models import Measurement, VehicleInfo
 from iran_obd_tuner.core.pids import DEFAULT_LIVE_DATA_PIDS, normalize_pid
 from iran_obd_tuner.database.repository import DtcDefinition, KnowledgeRepository
 from iran_obd_tuner.diagnostics.models import (
@@ -34,17 +34,20 @@ from iran_obd_tuner.diagnostics.models import (
     ReadOutcome,
     TroubleCode,
 )
-from iran_obd_tuner.hardware.base import AdapterInfo, ObdAdapter
+from iran_obd_tuner.hardware.base import AdapterInfo, MeasurementBatch, ObdAdapter
 
 __all__ = [
     "FREEZE_FRAME_PIDS",
     "DiagnosticService",
     "interpret_trouble_code",
+    "read_requested_measurements",
     "read_dtc_categories",
     "read_freeze_frame_snapshot",
     "read_monitor_status_result",
     "vehicle_info_for",
 ]
+
+_LOG = get_logger("diagnostics.service")
 
 #: Freeze frame parameters read by default (service 02, frame 00), in service 01 form:
 #: load, coolant, short/long term fuel trim bank 1, rpm, speed, intake air, throttle.
@@ -140,6 +143,35 @@ def read_dtc_categories(
         else:
             results.append(DtcCategoryResult(status, ReadOutcome.OK, codes))
     return tuple(results)
+
+
+def read_requested_measurements(
+    adapter: ObdAdapter, pids: Sequence[str]
+) -> tuple[MeasurementBatch, tuple[str, ...]]:
+    """Read ``pids`` one by one; one silent or garbled parameter never aborts the report.
+
+    Returns:
+        The batch (decoded measurements, plus the unsupported parameters in
+        ``skipped_pids``) and the parameters that went unanswered or came back malformed.
+
+    Raises:
+        AdapterConnectionError: Only when the connection is lost.
+    """
+    measurements: list[Measurement] = []
+    skipped: list[str] = []
+    unanswered: list[str] = []
+    for pid in pids:
+        try:
+            measurements.append(adapter.read_measurement(pid))
+        except AdapterConnectionError:
+            raise
+        except (UnsupportedPidError, UnsupportedOperationError):
+            skipped.append(pid)
+        except (AdapterTimeoutError, ProtocolError) as exc:
+            _LOG.warning("parameter %s was not answered: %s", pid, exc)
+            unanswered.append(pid)
+    batch = MeasurementBatch(measurements=tuple(measurements), skipped_pids=tuple(skipped))
+    return batch, tuple(unanswered)
 
 
 def read_monitor_status_result(adapter: ObdAdapter) -> MonitorStatusResult:
@@ -282,7 +314,7 @@ class DiagnosticService:
         with self._adapter.session(timeout_s=self._connect_timeout_s):
             vin = self._adapter.read_vin() if read_vin else None
             supported = self._adapter.read_supported_pids()
-            batch = self._adapter.read_measurements(requested)
+            batch, unanswered = read_requested_measurements(self._adapter, requested)
             monitor_status = read_monitor_status_result(self._adapter)
             categories = read_dtc_categories(self._adapter, self._knowledge)
             freeze_frame = (
@@ -300,6 +332,7 @@ class DiagnosticService:
             measurements=batch.measurements,
             supported_pids=supported,
             skipped_pids=batch.skipped_pids,
+            unanswered_pids=unanswered,
             trouble_codes=trouble_codes,
             duration_s=round(time.monotonic() - started, 3),
             knowledge_source=None if self._knowledge is None else self._knowledge.source,
@@ -310,9 +343,11 @@ class DiagnosticService:
         )
 
         self._log.info(
-            "diagnostic session finished: %d measurement(s), %d trouble code(s), %d skipped",
+            "diagnostic session finished: %d measurement(s), %d trouble code(s), "
+            "%d unsupported, %d unanswered",
             len(report.measurements),
             len(report.trouble_codes),
             len(report.skipped_pids),
+            len(report.unanswered_pids),
         )
         return report

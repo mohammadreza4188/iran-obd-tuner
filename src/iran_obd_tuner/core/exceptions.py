@@ -35,6 +35,7 @@ __all__ = [
     "UnsupportedOperationError",
     "UnsupportedPidError",
     "VehicleKnowledgeError",
+    "VehicleSilentError",
 ]
 
 
@@ -109,6 +110,14 @@ class AdapterNotImplementedError(AdapterError):
 
 class AdapterConnectionError(AdapterError):
     """The adapter could not be opened, was closed unexpectedly or was used unconnected."""
+
+
+class VehicleSilentError(AdapterConnectionError):
+    """Several live polls in a row went entirely unanswered (ignition off? adapter hung?).
+
+    Raised by the live data session's circuit breaker so the dashboard stops sending
+    requests and disconnects instead of polling a silent vehicle forever.
+    """
 
 
 class AdapterTimeoutError(AdapterError):

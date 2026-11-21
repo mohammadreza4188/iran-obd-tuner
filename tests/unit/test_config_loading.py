@@ -21,7 +21,7 @@ VALID_CONFIG = """
 adapter = "elm327"
 serial_port = "COM7"
 serial_baudrate = 115200
-connect_timeout_s = 3.5
+connect_timeout_s = 7.5
 command_timeout_s = 0.75
 live_data_pids = ["010C", "010D"]
 log_level = "debug"
@@ -54,7 +54,7 @@ def test_file_values_are_loaded_and_recorded(tmp_path: Path) -> None:
     assert settings.adapter == "elm327"
     assert settings.serial_port == "COM7"
     assert settings.serial_baudrate == 115200
-    assert settings.connect_timeout_s == 3.5
+    assert settings.connect_timeout_s == 7.5
     assert settings.command_timeout_s == 0.75
     assert settings.live_data_pids == ("010C", "010D")
     assert settings.log_level == "DEBUG"
@@ -131,6 +131,33 @@ def test_missing_explicit_file_is_rejected(tmp_path: Path) -> None:
 def test_invalid_environment_values_are_rejected(key: str, value: str) -> None:
     with pytest.raises(ConfigurationError):
         _load(env={f"{ENV_PREFIX}{key}": value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("command_timeout_s", 0.01),
+        ("command_timeout_s", 0.49),
+        ("command_timeout_s", 10.5),
+        ("connect_timeout_s", 4.9),
+        ("connect_timeout_s", 61.0),
+        ("connect_timeout_s", 1e9),
+    ],
+)
+def test_timeouts_outside_their_safe_range_are_refused(field: str, value: float) -> None:
+    with pytest.raises(ConfigurationError, match=f"'{field}' must be within"):
+        AppSettings(**{field: value})
+
+
+def test_timeout_range_bounds_are_accepted() -> None:
+    for command, connect in ((0.5, 5.0), (10.0, 60.0)):
+        settings = AppSettings(command_timeout_s=command, connect_timeout_s=connect)
+        assert (settings.command_timeout_s, settings.connect_timeout_s) == (command, connect)
+
+
+def test_an_out_of_range_timeout_in_the_environment_is_refused() -> None:
+    with pytest.raises(ConfigurationError, match="must be within"):
+        _load(env={f"{ENV_PREFIX}COMMAND_TIMEOUT_S": "0.01"})
 
 
 def test_settings_validate_direct_construction() -> None:

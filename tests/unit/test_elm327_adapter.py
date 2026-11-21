@@ -91,7 +91,7 @@ def test_a_device_that_is_not_an_elm327_gets_nothing_but_the_reset(make_adapter)
     with pytest.raises(AdapterConnectionError, match="did not identify as an ELM327"):
         adapter.connect()
 
-    assert transport.written == ["ATZ"]
+    assert transport.written == ["ATZ"]  # in particular no AT PC to an unknown device
     assert transport.closed is True
     assert adapter.is_connected is False
 
@@ -157,6 +157,41 @@ def test_disconnect_closes_the_port(make_adapter) -> None:
 
     assert transport.closed is True
     assert adapter.is_connected is False
+
+
+def test_disconnect_closes_the_protocol_before_the_port(make_adapter) -> None:
+    adapter, transport = make_adapter()
+    adapter.connect()
+
+    adapter.disconnect()
+
+    assert transport.written[-1] == "ATPC"  # K-line keep-alives stop, then the port closes
+    assert transport.written.count("ATPC") == 1
+    assert transport.closed is True
+
+
+def test_a_failing_protocol_close_still_closes_the_port(make_adapter, can_vehicle_script) -> None:
+    can_vehicle_script["ATPC"] = AdapterConnectionError("COM3: write failed: device gone")
+    adapter, transport = make_adapter()
+    adapter.connect()
+
+    adapter.disconnect()
+
+    assert transport.closed is True
+    assert adapter.is_connected is False
+
+
+def test_a_failed_connect_after_identification_closes_the_protocol(
+    make_adapter, can_vehicle_script
+) -> None:
+    can_vehicle_script["0100"] = "NO DATA"  # an ELM327, but no vehicle answers
+    adapter, transport = make_adapter()
+
+    with pytest.raises(AdapterConnectionError, match="ignition"):
+        adapter.connect()
+
+    assert transport.written[-1] == "ATPC"
+    assert transport.closed is True
 
 
 # --------------------------------------------------------------------------- #
@@ -451,3 +486,27 @@ def test_report_over_elm327_has_all_m3_sections(make_adapter) -> None:
     assert statuses["010C"] is PidStatus.OK
     assert statuses["010D"] is PidStatus.NO_RESPONSE
     assert statuses["0111"] is PidStatus.UNSUPPORTED
+
+
+def test_one_unanswered_parameter_does_not_abort_the_report(make_adapter) -> None:
+    adapter, _transport = make_adapter()
+    service = DiagnosticService(adapter, JsonKnowledgeRepository())
+
+    report = service.collect_report(pids=["010C", "010D", "0105", "0110"])
+
+    assert [m.pid for m in report.measurements] == ["010C", "0105"]
+    assert report.unanswered_pids == ("010D",)  # NO DATA: listed, never a value
+    assert report.skipped_pids == ("0110",)  # unsupported: nothing was sent
+    assert report.category(DtcStatus.STORED) is not None  # the rest was still read
+    assert adapter.is_connected is False
+
+
+def test_a_lost_connection_still_aborts_the_report(make_adapter, can_vehicle_script) -> None:
+    can_vehicle_script["010C"] = AdapterConnectionError("COM3: read failed: device gone")
+    adapter, transport = make_adapter()
+    service = DiagnosticService(adapter, JsonKnowledgeRepository())
+
+    with pytest.raises(AdapterConnectionError, match="device gone"):
+        service.collect_report(pids=["010C", "0105"])
+
+    assert transport.closed is True

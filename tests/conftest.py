@@ -248,6 +248,7 @@ CAN_VEHICLE: dict[str, Reply] = {
     "0120": "41 20 00 02 00 01",
     "0140": "41 40 40 00 00 10",
     "ATDPN": "A6",
+    "ATPC": "OK",  # protocol close, sent on disconnect
     "010C": "41 0C 1A F8",  # data sheet: 6904 / 4 = 1726 rpm
     "0105": "41 05 7B",  # data sheet: 123 - 40 = 83 degC
     "0142": "41 42 37 2A",  # 14122 mV

@@ -257,6 +257,10 @@ COPY: dict[str, dict[str, Any]] = {
         ),
         "adapter_unavailable": "آداپتور انتخاب‌شده آماده نیست:\n{0}",
         "connection_failed": "اتصال برقرار نشد:\n{0}",
+        "vehicle_silent": (
+            "خودرو به چند درخواست پیاپی هیچ پاسخی نداد؛ ارسال درخواست متوقف و اتصال قطع شد.\n"
+            "سوئیچ بسته شده است؟ آداپتور را بررسی کنید و دوباره وصل شوید."
+        ),
         "recording_failed": "شروع ضبط ناموفق بود:\n{0}",
         "save_dialog_title": "ذخیره داده‌های زنده",
         "save_dialog_filter": "فایل CSV (*.csv)",
@@ -491,6 +495,7 @@ COPY: dict[str, dict[str, Any]] = {
             "msg.connect_error": "خطای اتصال: {0}",
             "msg.adapter_unavailable": "آداپتور در دسترس نیست: {0}",
             "msg.connection_lost": "ارتباط با آداپتور قطع شد: {0}",
+            "msg.vehicle_silent": "سوئیچ بسته شد؟ خودرو پاسخ نمی‌دهد؛ اتصال قطع شد: {0}",
             "msg.dtc_read": "{0} کد خطا خوانده شد",
             "msg.ff_read": "Freeze Frame خوانده شد: {0}",
             "msg.ff_error": "خطای خواندن Freeze Frame: {0}",
@@ -751,6 +756,10 @@ COPY: dict[str, dict[str, Any]] = {
         ),
         "adapter_unavailable": "The selected adapter is not ready:\n{0}",
         "connection_failed": "Connection failed:\n{0}",
+        "vehicle_silent": (
+            "The vehicle did not answer several polls in a row; polling stopped and the "
+            "adapter was disconnected.\nIgnition turned off? Check the adapter and connect again."
+        ),
         "recording_failed": "Recording could not be started:\n{0}",
         "save_dialog_title": "Save live data",
         "save_dialog_filter": "CSV files (*.csv)",
@@ -985,6 +994,9 @@ COPY: dict[str, dict[str, Any]] = {
             "msg.connect_error": "Connect error: {0}",
             "msg.adapter_unavailable": "Adapter not available: {0}",
             "msg.connection_lost": "Connection to the adapter lost: {0}",
+            "msg.vehicle_silent": (
+                "Ignition turned off? The vehicle stopped answering; disconnected: {0}"
+            ),
             "msg.dtc_read": "{0} trouble code(s) read",
             "msg.ff_read": "Freeze frame read: {0}",
             "msg.ff_error": "Freeze frame read error: {0}",

@@ -124,3 +124,19 @@ def test_diagnose_prints_mil_categories_and_freeze_frame(
     assert "permanent trouble codes (service 0A) (1):" in out
     assert "freeze frame 00 (trigger P0301):" in out
     assert "(unsupported)" in out  # throttle is not in the simulated freeze frame
+
+
+def test_diagnose_no_live_reads_no_live_parameters(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["diagnose", "--no-live", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["measurements"] == []
+    assert payload["unanswered_pids"] == [] and payload["skipped_pids"] == []
+    assert payload["supported_pids"]  # still known from the connect-time bitmasks
+    assert payload["dtc_categories"] and payload["monitor_status"] is not None
+    assert payload["adapter"]["simulated"] is True
+
+
+def test_diagnose_no_live_and_pids_are_exclusive(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["diagnose", "--no-live", "--pids", "010C"]) == 2
+    assert "cannot be combined" in capsys.readouterr().err

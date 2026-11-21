@@ -60,6 +60,7 @@ from iran_obd_tuner.core.exceptions import (
     IranObdTunerError,
     SafetyGuardError,
     UnsupportedOperationError,
+    VehicleSilentError,
 )
 from iran_obd_tuner.core.logging import get_logger
 from iran_obd_tuner.core.models import VehicleInfo
@@ -823,6 +824,13 @@ class MainWindow(QMainWindow):
         if generation != self._generation:
             return
         self._poll_pending = False
+        if isinstance(error, VehicleSilentError):
+            # Circuit breaker: the vehicle stopped answering (typically: ignition off).
+            self._append_log("msg.vehicle_silent", _describe(error))
+            self._disconnect()
+            t = COPY[self.lang]
+            QMessageBox.warning(self, t["title"], t["vehicle_silent"])
+            return
         self._append_log("msg.connection_lost", _describe(error))
         self._disconnect()
 

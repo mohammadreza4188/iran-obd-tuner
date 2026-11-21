@@ -27,11 +27,11 @@ adapter = "mock"
 # Env: IRAN_OBD_TUNER_SERIAL_BAUDRATE
 serial_baudrate = 38400
 
-# Seconds to wait for the adapter to answer a connection attempt.
+# Seconds to wait for the adapter to answer a connection attempt (allowed: 5 to 60).
 # Env: IRAN_OBD_TUNER_CONNECT_TIMEOUT_S
 connect_timeout_s = 5.0
 
-# Seconds to wait for the response of a single diagnostic request.
+# Seconds to wait for the response of a single diagnostic request (allowed: 0.5 to 10).
 # Env: IRAN_OBD_TUNER_COMMAND_TIMEOUT_S
 command_timeout_s = 2.0
 
@@ -74,7 +74,8 @@ dyno_air_density_kg_m3 = 1.06      # about 1200 m altitude
 # UDS ECU identification over CAN (read-only: DIDs via 0x22, DTCs via 0x19).
 # can_interface: "virtual-sim" = simulated ECU on python-can's in-process virtual bus
 # (every value it returns is simulated); real interfaces need the [can] extra and a channel:
-# "slcan" (COM5, /dev/ttyACM0), "pcan" (PCAN_USBBUS1), "gs_usb", "kvaser" (0), "socketcan" (can0).
+# "slcan" (COM5, /dev/ttyACM0), "pcan" (PCAN_USBBUS1), "kvaser" (0). Real interfaces only at
+# 250000 or 500000 bit/s; each is probed listen-only before the first transmission.
 # Env: IRAN_OBD_TUNER_CAN_INTERFACE, IRAN_OBD_TUNER_CAN_CHANNEL, ...
 can_interface = "virtual-sim"
 # can_channel = "COM5"

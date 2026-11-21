@@ -16,6 +16,12 @@ Session set-up (``connect``):
    which service 01 parameters the vehicle supports;
 6. ``AT DPN`` - which protocol was found (reported as :attr:`active_protocol`).
 
+Session end (``disconnect``): ``AT PC`` (Protocol Close) is sent first, so the adapter stops
+the periodic ISO 9141/14230 keep-alive messages it would otherwise keep sending to the ECU
+while it stays powered from the OBD socket; then the port is closed. ``AT PC`` is sent only
+to a device that identified as an ELM327, is bounded by :data:`CLOSE_TIMEOUT_S`, and a
+failure (e.g. the adapter was unplugged) never prevents the port from being closed.
+
 Safety: every command passes :func:`~iran_obd_tuner.hardware.elm327_protocol.
 check_command_allowed` before it is written, so only AT set-up commands and the read-only OBD
 services 01, 02 (frame 00), 03, 07, 0A and 09 can ever be sent. Clearing trouble codes
@@ -39,6 +45,7 @@ from iran_obd_tuner.core.exceptions import (
     AdapterConnectionError,
     AdapterError,
     ProtocolError,
+    SafetyGuardError,
     UnsupportedPidError,
 )
 from iran_obd_tuner.core.logging import get_logger
@@ -77,6 +84,8 @@ RESET_TIMEOUT_S = 5.0
 #: Seconds the first request may take while the adapter searches all protocols. Slow ISO
 #: 9141/14230 initiations take 2-3 s each (data sheet); this is a generous, unverified bound.
 SEARCH_TIMEOUT_S = 30.0
+#: Seconds the ``AT PC`` on disconnect may take; the port is closed afterwards regardless.
+CLOSE_TIMEOUT_S = 1.0
 
 TransportFactory = Callable[[str, int], Transport]
 
@@ -120,6 +129,7 @@ class Elm327Adapter(ObdAdapter):
         self._supported: frozenset[str] = frozenset()
         self._freeze_frame_supported: frozenset[str] | None = None
         self._version: str | None = None
+        self._identified = False  # the device on the port answered AT Z as an ELM327
         self._log = get_logger("hardware.elm327")
 
     # ------------------------------------------------------------------ identity
@@ -162,6 +172,7 @@ class Elm327Adapter(ObdAdapter):
                 f"(reply to AT Z: {reply!r}); no further commands were sent"
             )
         self._version = identity
+        self._identified = True
         self._log.info("adapter on %s: %s", self._port, identity)
 
         for command in ("ATE0", "ATL0", "ATH0", "ATTP0"):
@@ -200,6 +211,12 @@ class Elm327Adapter(ObdAdapter):
         return frozenset(f"01{pid:02X}" for pid in supported)
 
     def _close(self) -> None:
+        if self._transport is not None and self._identified:
+            try:
+                self._command("ATPC", timeout_s=CLOSE_TIMEOUT_S, check_status=False)
+            except (AdapterError, SafetyGuardError) as exc:  # unplugged, hung: just close
+                self._log.debug("AT PC on disconnect failed: %s", exc)
+        self._identified = False
         transport, self._transport = self._transport, None
         if transport is not None:
             transport.close()

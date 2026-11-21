@@ -19,8 +19,13 @@ listed in :data:`ALLOWED_REQUESTS` is refused, and the write/security/programmin
 in :data:`FORBIDDEN_SERVICES` are named so the refusal is explicit. There is no code path
 that could send them.
 
+Bounded waits: a request that goes unanswered while the bus has never delivered a single
+frame raises :class:`UdsNoTrafficError` (an ``AdapterConnectionError``: the session stops,
+nothing is retried). The P2* an ECU announces is capped at :data:`P2_STAR_CEILING_S`.
+
 Negative responses (``7F <SID> <NRC>``): ``0x78`` responsePending waits P2* again, up to
-:attr:`UdsTiming.max_pending` answers and :attr:`UdsTiming.pending_ceiling_s` seconds;
+:attr:`UdsTiming.max_pending` answers and :attr:`UdsTiming.pending_ceiling_s` seconds (no
+wait extends past that ceiling);
 ``0x21`` busyRepeatRequest is retried twice; "not supported" codes raise
 :class:`UdsNotSupportedError` (an ``UnsupportedOperationError``); everything else raises
 :class:`UdsNegativeResponseError` (a ``ProtocolError``) carrying the NRC.
@@ -37,6 +42,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from iran_obd_tuner.core.exceptions import (
+    AdapterConnectionError,
     AdapterTimeoutError,
     ProtocolError,
     SafetyGuardError,
@@ -55,7 +61,9 @@ __all__ = [
     "STANDARD_DIDS",
     "UdsClient",
     "UdsDtcStatus",
+    "P2_STAR_CEILING_S",
     "UdsNegativeResponseError",
+    "UdsNoTrafficError",
     "UdsNotSupportedError",
     "UdsTiming",
     "check_request_allowed",
@@ -185,6 +193,15 @@ class UdsNotSupportedError(UnsupportedOperationError):
         self.sid, self.nrc = sid, nrc
 
 
+class UdsNoTrafficError(AdapterConnectionError):
+    """A request went unanswered and the bus never delivered a single frame.
+
+    On a real interface this means wrong wiring, bitrate or identifiers (or a disturbed
+    bus that the driver cannot report, e.g. ``slcan``): the session is aborted at once and
+    nothing is retried, so no further request is put on a bus that may be in trouble.
+    """
+
+
 class UdsNegativeResponseError(ProtocolError):
     """Any other negative response, e.g. ``0x22`` conditionsNotCorrect."""
 
@@ -267,15 +284,22 @@ def parse_dtc_records(response: bytes) -> tuple[int, list[tuple[bytes, UdsDtcSta
 # --------------------------------------------------------------------------- #
 
 
+#: Hard ceiling for the wait after one responsePending answer, whatever P2* the ECU
+#: announces in its session control answer (the field allows up to 655.35 s).
+P2_STAR_CEILING_S = 10.0
+
+
 @dataclass(frozen=True, slots=True)
 class UdsTiming:
     """Client timing.
 
     Attributes:
         p2_s: Time to wait for a first answer (generous; the ECU's P2 is usually 50 ms).
-        p2_star_s: Time to wait after a responsePending answer (updated from the ECU).
+        p2_star_s: Time to wait after a responsePending answer (raised to the ECU's P2*
+            when it announces a longer one, but never above :data:`P2_STAR_CEILING_S`).
         max_pending: responsePending answers accepted for one request.
-        pending_ceiling_s: Total time one request may stay pending.
+        pending_ceiling_s: Total time one request may stay pending; every wait ends by
+            then, even after a responsePending.
         keepalive_s: In the extended session, send TesterPresent before a request when the
             last request is older than this (the ECU's S3 timer is typically 5 s).
     """
@@ -285,6 +309,12 @@ class UdsTiming:
     max_pending: int = 10
     pending_ceiling_s: float = 30.0
     keepalive_s: float = 2.0
+
+    def __post_init__(self) -> None:
+        if min(self.p2_s, self.p2_star_s, self.pending_ceiling_s, self.keepalive_s) <= 0:
+            raise ValueError("UDS timing values must be positive")
+        if self.p2_star_s > P2_STAR_CEILING_S:
+            raise ValueError(f"p2_star_s may not exceed {P2_STAR_CEILING_S:.0f}s")
 
 
 class UdsClient:
@@ -346,6 +376,13 @@ class UdsClient:
                 remaining = deadline - self._clock()
                 response = self._channel.recv(remaining) if remaining > 0 else None
                 if response is None:
+                    if self._channel.frames_received == 0:
+                        raise UdsNoTrafficError(
+                            f"UDS service {sid:#04x}: no answer, and not a single frame was "
+                            f"received from {self._channel.config.rx_id:#05x} since the link "
+                            "opened; check wiring, bitrate and identifiers. The session is "
+                            "aborted and nothing is retried"
+                        )
                     raise AdapterTimeoutError(
                         f"UDS service {sid:#04x}: no answer within "
                         f"{self._timing.p2_s if not pending else self._p2_star_s:.1f}s"
@@ -365,7 +402,10 @@ class UdsClient:
                             f"UDS service {sid:#04x}: still pending after {pending} "
                             "responsePending answers; giving up"
                         )
-                    deadline = self._clock() + self._p2_star_s
+                    deadline = min(
+                        self._clock() + self._p2_star_s,
+                        started + self._timing.pending_ceiling_s,
+                    )
                     continue
                 if nrc == _BUSY and busy_retries < 2:
                     busy_retries += 1
@@ -390,7 +430,7 @@ class UdsClient:
             raise ProtocolError(f"unexpected session control answer: {response.hex(' ')}")
         if len(response) >= 6:  # P2 (ms) and P2* (10 ms units) of the ECU
             server_p2_star = int.from_bytes(response[4:6], "big") * 0.01
-            self._p2_star_s = max(self._timing.p2_star_s, server_p2_star)
+            self._p2_star_s = min(max(self._timing.p2_star_s, server_p2_star), P2_STAR_CEILING_S)
         self._session = session
 
     def tester_present(self, *, suppress_response: bool = True) -> None:

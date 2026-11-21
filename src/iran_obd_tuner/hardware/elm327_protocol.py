@@ -71,8 +71,11 @@ PROMPT = b">"
 #: AT commands this driver may send. All of them configure the adapter for the current
 #: session or read information; none of them writes to the vehicle. ``AT SP`` is
 #: deliberately absent (it writes the adapter's EEPROM); ``AT TP 0`` is used instead.
+#: ``AT PC`` (Protocol Close, data sheet) is adapter-side only: it ends the active protocol,
+#: which stops the periodic ISO 9141/14230 wake-up (keep-alive) messages the adapter would
+#: otherwise keep sending to the ECU after the session; it is sent on disconnect.
 ALLOWED_AT_COMMANDS: frozenset[str] = frozenset(
-    {"ATZ", "ATE0", "ATL0", "ATH0", "ATTP0", "ATDPN", "ATDP", "ATI", "ATRV"}
+    {"ATZ", "ATE0", "ATL0", "ATH0", "ATTP0", "ATDPN", "ATDP", "ATI", "ATRV", "ATPC"}
 )
 
 #: OBD requests this driver may send, all of them reads:
@@ -84,17 +87,20 @@ ALLOWED_AT_COMMANDS: frozenset[str] = frozenset(
 #: Everything else is refused - in particular service 04 (clear trouble codes and freeze
 #: frames), 05/06 (test results, not needed), 08 (control of on-board systems) and every
 #: UDS or manufacturer service.
-_ALLOWED_OBD = re.compile(r"^(01[0-9A-F]{2}|02[0-9A-F]{2}00|03|07|0A|09[0-9A-F]{2})$")
+_ALLOWED_OBD = re.compile(r"01[0-9A-F]{2}|02[0-9A-F]{2}00|03|07|0A|09[0-9A-F]{2}")
 
 
 def check_command_allowed(command: str) -> str:
     """Return the normalised command, or refuse it before it can be sent.
 
+    The whole command must match (``fullmatch``): a trailing newline or any other extra
+    character is refused, never passed through.
+
     Raises:
         SafetyGuardError: If ``command`` is not on the read-only whitelist.
     """
     normalized = command.replace(" ", "").upper()
-    if normalized in ALLOWED_AT_COMMANDS or _ALLOWED_OBD.match(normalized):
+    if normalized in ALLOWED_AT_COMMANDS or _ALLOWED_OBD.fullmatch(normalized):
         return normalized
     raise SafetyGuardError(
         f"refusing to send {command!r} to the adapter: only read-only commands "

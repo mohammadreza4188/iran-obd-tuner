@@ -8,14 +8,20 @@ from __future__ import annotations
 
 import pytest
 
-from iran_obd_tuner.core.exceptions import AdapterTimeoutError, SafetyGuardError
+from iran_obd_tuner.core.exceptions import (
+    AdapterConnectionError,
+    AdapterTimeoutError,
+    SafetyGuardError,
+)
 from iran_obd_tuner.hardware.isotp import IsoTpChannel, IsoTpConfig
 from iran_obd_tuner.hardware.uds import (
     ALLOWED_REQUESTS,
     FORBIDDEN_SERVICES,
+    P2_STAR_CEILING_S,
     UdsClient,
     UdsDtcStatus,
     UdsNegativeResponseError,
+    UdsNoTrafficError,
     UdsNotSupportedError,
     UdsTiming,
     check_request_allowed,
@@ -124,13 +130,75 @@ def test_busy_repeat_request_is_retried_twice(make_uds_client) -> None:
     assert ecu.requests.count(b"\x22\xf1\x89") == 3
 
 
-def test_no_answer_is_a_timeout(fake_can_bus) -> None:
+def test_a_bus_that_never_answered_aborts_at_once_without_retry(fake_can_bus) -> None:
     bus = fake_can_bus()
     channel = IsoTpChannel(bus, IsoTpConfig(TX, RX), clock=bus.clock, sleep=bus.sleep)
     client = UdsClient(channel, clock=bus.clock, sleep=bus.sleep)
 
-    with pytest.raises(AdapterTimeoutError, match="no answer"):
+    with pytest.raises(UdsNoTrafficError, match="not a single frame") as raised:
         client.read_data_by_identifier(0xF190)
+
+    assert isinstance(raised.value, AdapterConnectionError)  # stops the session
+    assert len(bus.sent) == 1  # exactly one request, nothing retried
+
+
+def test_no_answer_after_earlier_traffic_is_a_timeout(make_uds_client) -> None:
+    class GoesSilent(SimulatedUdsEcu):
+        def handle(self, request: bytes) -> list[bytes]:
+            if request == b"\x22\xf1\x89":
+                self.requests.append(request)
+                return []  # this one DID is never answered
+            return super().handle(request)
+
+    client, _ecu, _bus = make_uds_client(GoesSilent())
+    client.read_data_by_identifier(0xF190)  # the bus has answered once
+
+    with pytest.raises(AdapterTimeoutError, match="no answer"):
+        client.read_data_by_identifier(0xF189)
+
+
+def test_ecu_announced_p2_star_is_capped(make_uds_client) -> None:
+    class SlowAnnouncer(SimulatedUdsEcu):
+        def handle(self, request: bytes) -> list[bytes]:
+            if request[:1] == b"\x10":
+                self.requests.append(request)
+                return [b"\x50\x01\x00\x32\xff\xff"]  # P2* = 0xFFFF * 10 ms = 655.35 s
+            if request == b"\x22\xf1\x90":
+                self.requests.append(request)
+                return [b"\x7f\x22\x78"]  # one responsePending, then silence
+            return super().handle(request)
+
+    client, _ecu, bus = make_uds_client(SlowAnnouncer())
+    client.diagnostic_session_control(0x01)
+    started = bus.clock()
+
+    with pytest.raises(AdapterTimeoutError):
+        client.read_data_by_identifier(0xF190)
+
+    waited = bus.clock() - started
+    assert waited <= UdsTiming().p2_s + P2_STAR_CEILING_S + 0.01
+
+
+def test_no_wait_outlives_the_pending_ceiling(make_uds_client) -> None:
+    timing = UdsTiming(p2_star_s=10.0, pending_ceiling_s=3.0)
+
+    class OnePendingThenSilence(SimulatedUdsEcu):
+        def handle(self, request: bytes) -> list[bytes]:
+            self.requests.append(request)
+            return [b"\x7f\x22\x78"] if request[:1] == b"\x22" else []
+
+    client, _ecu, bus = make_uds_client(OnePendingThenSilence(), timing=timing)
+    started = bus.clock()
+    with pytest.raises(AdapterTimeoutError):
+        client.read_data_by_identifier(0xF190)
+    assert bus.clock() - started <= 3.0 + 0.01
+
+
+def test_timing_refuses_an_unbounded_p2_star() -> None:
+    with pytest.raises(ValueError, match="p2_star_s"):
+        UdsTiming(p2_star_s=P2_STAR_CEILING_S + 1)
+    with pytest.raises(ValueError, match="positive"):
+        UdsTiming(p2_s=0)
 
 
 def test_extended_session_is_opt_in_and_always_left(make_uds_client) -> None:

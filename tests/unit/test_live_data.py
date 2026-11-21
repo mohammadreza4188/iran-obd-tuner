@@ -12,11 +12,13 @@ from iran_obd_tuner.core.exceptions import (
     ProtocolError,
     SafetyGuardError,
     UnsupportedPidError,
+    VehicleSilentError,
 )
 from iran_obd_tuner.core.models import Measurement, Unit
 from iran_obd_tuner.core.pids import describe_pid
 from iran_obd_tuner.database.repository import JsonKnowledgeRepository
 from iran_obd_tuner.diagnostics.live_data import (
+    SILENT_POLL_LIMIT,
     LiveDataSession,
     LiveSnapshot,
     PidReading,
@@ -224,3 +226,85 @@ def test_snapshot_lookup_of_unrequested_parameter() -> None:
     assert snapshot.reading_for("010C") is None
     assert snapshot.value_for("010C") is None
     assert snapshot.has_values is False
+
+
+# --------------------------------------------------------------------------- circuit breaker
+
+
+class SwitchableAdapter(ScriptedAdapter):
+    """Answers until ``ignition_off`` is set, then every request goes unanswered."""
+
+    def __init__(self) -> None:
+        super().__init__({"010C": 900.0, "0105": 85.0})
+        self.ignition_off = False
+        self.requests = 0
+
+    def read_measurement(self, pid: str) -> Measurement:
+        self.requests += 1
+        if self.ignition_off:
+            raise AdapterTimeoutError("NO DATA")
+        return super().read_measurement(pid)
+
+
+def test_a_silent_vehicle_trips_the_breaker_after_the_limit() -> None:
+    adapter = SwitchableAdapter()
+    session = _session(adapter, silent_poll_limit=3)
+    session.connect()
+    assert session.poll(["010C", "0105"]).has_values
+
+    adapter.ignition_off = True
+    session.poll(["010C", "0105"])
+    session.poll(["010C", "0105"])
+    assert session.silent_polls == 2
+    with pytest.raises(VehicleSilentError, match="ignition turned off") as tripped:
+        session.poll(["010C", "0105"])
+
+    assert isinstance(tripped.value, AdapterConnectionError)  # the dashboard disconnects
+    assert adapter.requests == 2 + 3 * 2  # bounded: no request after the breaker tripped
+
+
+def test_any_answer_resets_the_breaker() -> None:
+    adapter = SwitchableAdapter()
+    session = _session(adapter, silent_poll_limit=2)
+    session.connect()
+    adapter.ignition_off = True
+    session.poll(["010C"])
+    adapter.ignition_off = False
+    session.poll(["010C"])  # one answer: the vehicle is alive
+    adapter.ignition_off = True
+    session.poll(["010C"])
+
+    assert session.silent_polls == 1  # never two in a row: no trip
+
+
+def test_unsupported_only_polls_do_not_count_as_silence() -> None:
+    session = _session(ScriptedAdapter({}), silent_poll_limit=1)
+    session.connect()
+
+    snapshot = session.poll(["0110", "0111"])  # nothing was asked of the vehicle
+
+    assert all(r.status is PidStatus.UNSUPPORTED for r in snapshot.readings)
+    assert session.silent_polls == 0
+
+
+def test_garbled_answers_count_as_silence() -> None:
+    session = _session(ScriptedAdapter({"010C": ProtocolError("STOPPED")}), silent_poll_limit=1)
+    session.connect()
+
+    with pytest.raises(VehicleSilentError):
+        session.poll(["010C"])
+
+
+def test_reconnecting_resets_the_breaker_and_the_limit_is_validated() -> None:
+    adapter = SwitchableAdapter()
+    session = _session(adapter, silent_poll_limit=5)
+    session.connect()
+    adapter.ignition_off = True
+    session.poll(["010C"])
+    session.disconnect()
+    session.connect()
+
+    assert session.silent_polls == 0
+    assert SILENT_POLL_LIMIT >= 2  # one missed reply must never disconnect
+    with pytest.raises(ValueError):
+        _session(adapter, silent_poll_limit=0)

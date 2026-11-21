@@ -181,6 +181,97 @@ def test_a_new_first_frame_restarts_reception(fake_can_bus) -> None:
     assert channel(bus).recv(1.0) == b"\xbb" * 10
 
 
+class DrippingBus:
+    """Answers every recv with ``make_frame()`` after ``every_s`` seconds of fake time."""
+
+    simulated = True
+
+    def __init__(self, clock, make_frame, every_s: float) -> None:
+        self.clock, self.make_frame, self.every_s = clock, make_frame, every_s
+        self.sent: list[CanFrame] = []
+
+    def send(self, frame: CanFrame) -> None:
+        self.sent.append(frame)
+
+    def recv(self, timeout_s: float):
+        if timeout_s < self.every_s:
+            self.clock.advance(timeout_s)
+            return None
+        self.clock.advance(self.every_s)
+        return self.make_frame()
+
+    def close(self) -> None:
+        pass
+
+    def sleep(self, seconds: float) -> None:
+        self.clock.advance(seconds)
+
+
+def test_stray_frames_do_not_keep_the_n_cr_wait_alive(fake_clock) -> None:
+    first = [True]
+
+    def next_frame() -> CanFrame:
+        if first[0]:
+            first[0] = False
+            return frame(RX, "1010" + "AA" * 6)  # FF of 16 bytes, then only stray FCs
+        return fc()
+
+    bus = DrippingBus(fake_clock, next_frame, every_s=0.4)
+    started = fake_clock()
+
+    with pytest.raises(AdapterTimeoutError, match="N_Cr"):
+        channel(bus).recv(1.0)
+
+    assert fake_clock() - started <= 0.4 + CONFIG.n_cr_s + 0.01
+
+
+def test_a_sender_dripping_consecutive_frames_hits_the_message_ceiling(fake_clock) -> None:
+    sequence = [0]
+
+    def next_frame() -> CanFrame:
+        if sequence[0] == 0:
+            sequence[0] = 1
+            return frame(RX, "1FFF" + "AA" * 6)  # 4095 bytes announced
+        number, sequence[0] = sequence[0] & 0x0F, sequence[0] + 1
+        return CanFrame(RX, bytes([0x20 | number]) + b"\xaa" * 7)
+
+    bus = DrippingBus(fake_clock, next_frame, every_s=0.9)  # just inside N_Cr every time
+    config = IsoTpConfig(TX, RX, max_message_s=5.0)
+    started = fake_clock()
+
+    with pytest.raises(AdapterTimeoutError, match="not complete within 5.0s"):
+        channel(bus, config).recv(1.0)
+
+    assert fake_clock() - started <= 0.9 + 5.0 + 0.01
+
+
+def test_a_sender_that_keeps_restarting_is_refused(fake_clock) -> None:
+    bus = DrippingBus(fake_clock, lambda: frame(RX, "1010" + "AA" * 6), every_s=0.01)
+
+    with pytest.raises(ProtocolError, match="restarted its message 4 times"):
+        channel(bus, IsoTpConfig(TX, RX, max_restarts=3)).recv(5.0)
+
+    assert sum(1 for f in bus.sent if f.data[0] == 0x30) == 4  # one FC per FF, bounded
+
+
+def test_a_restart_after_the_deadline_is_refused(fake_clock) -> None:
+    bus = DrippingBus(fake_clock, lambda: frame(RX, "1010" + "AA" * 6), every_s=0.6)
+
+    with pytest.raises(AdapterTimeoutError, match="after the 1.0s deadline"):
+        channel(bus, IsoTpConfig(TX, RX, max_restarts=10)).recv(1.0)
+
+
+def test_frames_received_counts_only_the_response_identifier(fake_can_bus) -> None:
+    bus = fake_can_bus()
+    bus.incoming = [frame(0x123, "0101"), frame(RX, "037E00CCCCCCCCCC")]
+    ch = channel(bus)
+    assert ch.frames_received == 0
+
+    ch.recv(1.0)
+
+    assert ch.frames_received == 1
+
+
 def test_receive_timeout_and_malformed_single_frame(fake_can_bus) -> None:
     bus = fake_can_bus()
     assert channel(bus).recv(0.5) is None

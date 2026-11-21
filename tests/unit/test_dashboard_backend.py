@@ -42,11 +42,11 @@ def test_real_adapter_needs_a_port_and_never_falls_back_to_the_simulator() -> No
 
 
 def test_output_dir_and_timeouts_come_from_the_settings(tmp_path: Path) -> None:
-    settings = AppSettings(output_dir=tmp_path / "captures", connect_timeout_s=1.5)
+    settings = AppSettings(output_dir=tmp_path / "captures", connect_timeout_s=7.5)
     backend = AppDashboardBackend(settings)
 
     assert backend.output_dir == tmp_path / "captures"
-    assert backend.create_session(simulation=True, port=None).connect_timeout_s == 1.5
+    assert backend.create_session(simulation=True, port=None).connect_timeout_s == 7.5
 
 
 def test_port_listing_is_delegated_to_the_hardware_layer(monkeypatch: pytest.MonkeyPatch) -> None:
