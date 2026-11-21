@@ -25,8 +25,13 @@ __all__ = [
     "EvidenceExportError",
     "IranObdTunerError",
     "KnowledgeDatabaseError",
+    "MapDefinitionError",
     "ProtocolError",
+    "RomError",
+    "RomExportError",
+    "RomLoadError",
     "SafetyGuardError",
+    "TableEditError",
     "UnsupportedOperationError",
     "UnsupportedPidError",
     "VehicleKnowledgeError",
@@ -56,6 +61,26 @@ class EvidenceExportError(IranObdTunerError):
     Raised, for example, when VIN redaction was requested but the VIN would still appear in
     the bundle: the export fails closed instead of leaking it.
     """
+
+
+class RomError(IranObdTunerError):
+    """Base class of offline ROM analysis errors (Phase 4; never about an ECU connection)."""
+
+
+class RomLoadError(RomError):
+    """A ROM file cannot be loaded (size bounds, not a regular file, unsupported format)."""
+
+
+class MapDefinitionError(RomError):
+    """A map definition file is malformed or does not fit the loaded ROM."""
+
+
+class TableEditError(RomError):
+    """A table edit was refused (out of range, unknown map or cell). Nothing was changed."""
+
+
+class RomExportError(RomError):
+    """Exporting a modified ROM was refused or failed. The source file is never touched."""
 
 
 class VehicleKnowledgeError(KnowledgeDatabaseError):
