@@ -107,13 +107,18 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `diagnostics/vehicle_matcher.py` | `ObservedFacts`، `rank_candidates`، نرمال‌سازی پروتکل | پیاده‌شده (غیرفعال) |
 | `diagnostics/evidence_export.py` | بسته شواهد میدانی: پنهان‌سازی VIN، هش، ردیف‌های ارتقا | پیاده‌شده |
 | `ui/knowledge_view.py` | تب «پایگاه دانش خودرو» | پیاده‌شده |
-| `tuning/interfaces.py` | `CalibrationReader/Writer`, `BenchSafetyChecklist` | فقط قرارداد (فاز ۵ قفل) |
+| `tuning/interfaces.py` | `CalibrationReader/Writer`، `BenchSafetyChecklist` (از 7d: `HUMAN_ITEMS`/`MACHINE_ITEMS` و `compose(attestation, machine)`)، `BenchMachineChecks` | قرارداد؛ `CalibrationWriter` همچنان پیاده نشده |
 | `core/calibration.py` | نوع داده، دسته نقشه، الگوریتم/وضعیت چک‌سام، snapshotهای فقط‌خواندنی برای CLI/UI | پیاده‌شده |
 | `tuning/rom_loader.py` | `load_rom` (۱۶KiB–۸MiB، رد HEX/SREC)، `RomImage` تغییرناپذیر، رشته‌های ASCII، آمار پرشدگی | پیاده‌شده |
 | `tuning/map_definitions.py` | اعتبارسنج فایل تعریف نقشه (منبع، `verified` ممنوع) + `check_compatibility` | پیاده‌شده |
 | `tuning/tables.py`, `tuning/workspace.py` | decode/encode محدود، فرمان‌های Undo/Redo، diff، `RomWorkspace` | پیاده‌شده |
 | `tuning/checksum.py` | هفت الگوریتم با تعریف دقیق، بازه و حذف فیلد خودِ چک‌سام | پیاده‌شده |
-| `tuning/rom_export.py` | خروجی غیرمخرب + مانیفست (تنها نویسنده فایل در `tuning`) | پیاده‌شده |
+| `tuning/rom_export.py` | خروجی غیرمخرب + مانیفست (یکی از سه نویسنده فایل در `tuning`) | پیاده‌شده |
+| `tuning/flash_plan.py` | (Milestone 7d) `build_flash_plan`: اندازه، ناحیه‌ها، یکپارچگی تصویر، چک‌سام `valid` (override فقط برای target شبیه‌سازی‌شده) | پیاده‌شده |
+| `tuning/flash_gate.py` | (Milestone 7d) **تنها سازنده `FlashAuthorization`**: سیاست `BENCH_FLASH`، attestation کامل، فقط شبیه‌سازی، بررسی‌های ماشینی پوشه پشتیبان | پیاده‌شده (فقط شبیه‌ساز) |
+| `tuning/backup_vault.py` | (Milestone 7d) **تنها سازنده `BackupReceipt`**: دو خواندن برابر، نوشتن یک‌باره (`xb`)، مانیفست، بازخوانی از دیسک | پیاده‌شده |
+| `tuning/flash_journal.py` | (Milestone 7d) ژورنال اتمیک تراکنش، قفل تک‌نمونه، `JournalInspector` و `RecoveryAssessment`، بایگانی | پیاده‌شده |
+| `tuning/flash_orchestrator.py` | (Milestone 7d) `BenchFlashOrchestrator`: چهار مرحله و بازیابی، فقط روی `BenchProgrammerPort` | پیاده‌شده (فقط شبیه‌ساز) |
 | `tuning/demo.py`, `tuning/data/demo_maps.json` | ROM نمایشی شبیه‌سازی‌شده و تعریف نقشه‌هایش | پیاده‌شده (شبیه‌سازی) |
 | `app/bench.py`, `ui/bench_view.py` | `AppBenchWorkspace` (پیاده‌سازی Protocol `BenchWorkspace`) و تب «میز کار ROM» | پیاده‌شده |
 | `app/cli.py`, `app/application.py` | CLI و سیم‌کشی | پیاده‌شده |
@@ -317,6 +322,26 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
     - **لینک:** `hardware/bench_link.py` تنها سازنده programmer و سرور شبیه‌ساز است و فقط
       `virtual-sim-programmable` با کانال `bench-sim-...` را می‌پذیرد. هر رابط یا کانال دیگری
       `BenchTargetNotQualifiedError` می‌گیرد.
+  - **هماهنگ‌کننده فلش (Milestone 7d، فقط شبیه‌ساز):** پنج ماژول `tuning` روی
+    `BenchProgrammerPort` کار می‌کنند و `hardware` را import نمی‌کنند (تست AST). سه نویسنده فایل
+    در `tuning` وجود دارد: `rom_export`، `backup_vault` و `flash_journal`.
+    - **gate:** `authorize_bench_flash` سیاست `BENCH_FLASH`، attestation کامل، شبیه‌سازی‌شده بودن
+      attestation و target و لینک، و پوشه پشتیبان قابل‌نوشتن با فضای دو برابر تصویر به‌علاوه ۱ MiB
+      را بررسی می‌کند. `authorize_bench_recovery` مجوز را فقط به SHA-256 پشتیبان تأییدشده می‌بندد.
+    - **vault:** اگر دو خواندن ECU برابر نباشند هیچ چیزی نوشته نمی‌شود. فایل پشتیبان یک بار با `xb`
+      نوشته و fsync می‌شود، مانیفستش کنارش قرار می‌گیرد (`SIMULATED-...`)، فقط‌خواندنی می‌شود و پیش از
+      صدور رسید از دیسک بازخوانی می‌شود. `verify` درست پیش از erase دوباره اجرا می‌شود (تست AST روی ترتیب).
+    - **ژورنال:** هر مرحله *پیش* از انجامش ثبت می‌شود. نوشتن اتمیک است: `.tmp`، سپس fsync، سپس
+      `os.replace`. در ویندوز، رد اشتراک فایل (اسکن آنتی‌ویروس) حداکثر ۲۰ بار، در مجموع حدود یک ثانیه،
+      تکرار می‌شود و اگر باز هم رد شود fail-closed است. قفل تک‌نمونه هرگز خودکار شکسته نمی‌شود.
+      `JournalInspector` ژورنال dirty یا خراب را مانع هر فلش جدید می‌کند.
+    - **D3:** شکست پیش از erase یعنی `10 01` و `aborted` (ECU دست‌نخورده). شکست از erase به بعد یعنی
+      `interrupted`، بدون `10 01` و بدون `11 01`. `hard_reset` فقط پس از check routine و read-back
+      موفق صدا زده می‌شود (تست AST).
+    - **بازیابی:** هیچ پشتیبانی نمی‌گیرد. پشتیبان ثبت‌شده در ژورنال را دوباره بررسی می‌کند، هویت
+      bootloader یا هویت همان application پشتیبان را می‌پذیرد، و مراحل ۳ و ۴ را با تصویر پشتیبان اجرا
+      می‌کند. مسیرهای `recovery_failed` به `recovering` و «پروسه وسط انتقال مُرد» هم پوشش داده
+      شده‌اند.
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -470,6 +495,11 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۶۲ | (Milestone 7c) گارد AST برای ثابت‌های `SID_*` با مقدار نوشتنی | اسکن literal فقط عدد را می‌دید و `bytes([SID_X, ...])` را نمی‌گرفت؛ این شکاف در 7c پیدا و بسته شد | فقط اسکن literal |
 | ۶۳ | (Milestone 7c) پیوند هویت: هویت application روی لینک با خواندن در bootloader ضعیف نمی‌شود و فقط reset آن را پاک می‌کند | تست نشان داد که بدون این قاعده، خواندن دوباره هویت در جلسه programming پشتیبان ECU دیگری را می‌پذیرفت | آخرین خواندن جایگزین قبلی |
 | ۶۴ | (Milestone 7c) فقط `0x36` تکرار می‌شود (timeout یا `0x21`، ۲ بار برای هر بلوک و ۸ بار برای هر انتقال)؛ SecurityAccess هرگز | تکرار بلوک با همان شمارنده ایمن است (ECU تکرار را تأیید می‌کند)؛ تکرار کلید شمارنده تلاش ECU را مصرف می‌کند و می‌تواند قفل ایجاد کند | تکرار عمومی همه درخواست‌ها |
+| ۶۵ | (Milestone 7d) هماهنگ‌کننده فقط روی `BenchProgrammerPort` و در `tuning`؛ اتصال واقعی در `app` | قاعده لایه‌ها (`tuning` فقط `core`) و تست‌پذیری قطعی با باس جعلی؛ همان کد روی باس virtual و (در آینده) روی هر port دیگر | import `hardware` در `tuning` |
+| ۶۶ | (Milestone 7d) پشتیبان: دو خواندن مستقل و برابر، نوشتن یک‌باره `xb`، فقط‌خواندنی، بازخوانی از دیسک، و `verify` دوباره درست پیش از erase | خواندن ناپایدار نباید تنها نسخه شود؛ فایلی که پس از صدور رسید عوض شود (TOCTOU) نباید مبنای بازیابی باشد | یک خواندن و اعتماد به حافظه |
+| ۶۷ | (Milestone 7d) ژورنال پیش از هر مرحله و اتمیک؛ قفل O_EXCL که خودکار شکسته نمی‌شود؛ ژورنال خراب = fail-closed | پس از crash ژورنال هرگز کمتر از آنچه ممکن است رخ داده باشد ادعا نمی‌کند؛ تشخیص زنده بودن PID در ویندوز با `os.kill` خطرناک است | شکستن خودکار قفل کهنه |
+| ۶۸ | (Milestone 7d) تکرار محدود `os.replace`/unlink در برابر `PermissionError` (۲۰ بار، ۵۰ ms) | در اجرای تست‌ها روی ویندوز دیده شد: اسکن آنتی‌ویروس فایل تازه را لحظه‌ای باز نگه می‌دارد و rename رد می‌شود؛ همین روی لپ‌تاپ میدانی وسط فلش رخ می‌دهد | شکست فوری (فلش بی‌دلیل interrupted می‌شد) |
+| ۶۹ | (Milestone 7d) گارد نویسنده فایل در `tuning` حالت `Path.open(mode)` را هم می‌بیند | اسکن قبلی فقط آرگومان دوم `open(path, mode)` را می‌خواند و `Path.open("wb")` از آن رد می‌شد | فقط `open` داخلی |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)

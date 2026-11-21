@@ -388,6 +388,8 @@ _FILE_WRITE_CALLS = {
     "mkstemp",
 }
 FILE_WRITER = "tuning/rom_export.py"
+#: Milestone 7d: the backup vault and the flash journal are the other two file writers.
+TUNING_FILE_WRITERS = {FILE_WRITER, "tuning/backup_vault.py", "tuning/flash_journal.py"}
 
 
 def test_tuning_uses_only_core_and_harmless_standard_library() -> None:
@@ -405,6 +407,14 @@ def test_tuning_uses_only_core_and_harmless_standard_library() -> None:
     assert offenders == []
 
 
+def _is_os_attr(func: ast.AST) -> bool:
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "os"
+    )
+
+
 def test_only_the_exporter_writes_files_in_tuning() -> None:
     offenders = []
     for path in sorted((PACKAGE_DIR / "tuning").rglob("*.py")):
@@ -416,12 +426,17 @@ def test_only_the_exporter_writes_files_in_tuning() -> None:
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             writes = name in _FILE_WRITE_CALLS
             if name == "open":
-                modes = list(node.args[1:2]) + [k.value for k in node.keywords if k.arg == "mode"]
+                # builtin open(path, mode) and os.open(path, flags) carry the mode second;
+                # Path.open(mode) carries it first (Milestone 7d: that form was not seen)
+                position = 1 if isinstance(func, ast.Name) or _is_os_attr(func) else 0
+                modes = list(node.args[position : position + 1]) + [
+                    k.value for k in node.keywords if k.arg in ("mode", "flags")
+                ]
                 writes = any(
                     not (isinstance(m, ast.Constant) and set(str(m.value)) <= {"r", "b", "t"})
                     for m in modes
                 )
-            if writes and relative != FILE_WRITER:
+            if writes and relative not in TUNING_FILE_WRITERS:
                 offenders.append(f"{relative}:{node.lineno} {name}")
     assert offenders == []
 
@@ -921,3 +936,105 @@ def test_the_read_only_paths_stay_locked_after_milestone_7c() -> None:
         and (use.file in READ_ONLY_PATH_MODULES or use.layer in {"diagnostics", "ui"})
     ]
     assert offenders == []
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7d: orchestration in tuning - port only, ordered, never a blind reset
+# --------------------------------------------------------------------------- #
+
+ORCHESTRATOR_MODULE = "tuning/flash_orchestrator.py"
+BENCH_TUNING_MODULES = (
+    "tuning/flash_plan.py",
+    "tuning/flash_gate.py",
+    "tuning/backup_vault.py",
+    "tuning/flash_journal.py",
+    ORCHESTRATOR_MODULE,
+)
+
+
+def _function(relative: str, name: str) -> ast.FunctionDef:
+    tree = ast.parse((PACKAGE_DIR / relative).read_text(encoding="utf-8"))
+    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def _call_lines(node: ast.AST, attribute: str) -> list[int]:
+    return sorted(
+        call.lineno
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == attribute
+    )
+
+
+def test_the_bench_tuning_modules_exist_and_stay_off_hardware() -> None:
+    for relative in BENCH_TUNING_MODULES:
+        assert (PACKAGE_DIR / relative).exists(), relative
+    offenders = [
+        f"{use.file}: {use.module}"
+        for use in _imports()
+        if use.file in BENCH_TUNING_MODULES and _first_party_layer(use.module) == "hardware"
+    ]
+    assert offenders == []
+
+
+def test_the_backup_is_re_verified_on_disk_right_before_the_erase() -> None:
+    stages = _function(ORCHESTRATOR_MODULE, "_program_and_verify")
+    verify, erase = _call_lines(stages, "verify"), _call_lines(stages, "erase_region")
+    assert verify and erase and verify[0] < erase[0]
+
+
+def test_the_backup_is_journaled_before_stages_three_and_four() -> None:
+    flash = _function(ORCHESTRATOR_MODULE, "flash")
+    journaled = [
+        call.lineno
+        for call in ast.walk(flash)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "transition"
+        and call.args
+        and ast.unparse(call.args[0]) == "JournalState.BACKUP_VERIFIED"
+    ]
+    programmed = [
+        call.lineno
+        for call in ast.walk(flash)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "_program_and_verify"
+    ]
+    assert journaled and programmed and journaled[0] < programmed[0]
+
+
+def test_a_reset_happens_only_after_a_successful_verification() -> None:
+    tree = ast.parse((PACKAGE_DIR / ORCHESTRATOR_MODULE).read_text(encoding="utf-8"))
+    callers = {
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef) and _call_lines(function, "hard_reset")
+    }
+    assert callers == {"_program_and_verify"}  # never in _fail_flash or a recovery handler
+    stages = _function(ORCHESTRATOR_MODULE, "_program_and_verify")
+    assert _call_lines(stages, "check_memory")[0] < _call_lines(stages, "hard_reset")[0]
+    for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)):
+        assert not _call_lines(handler, "hard_reset"), handler.lineno
+
+
+def test_the_orchestrator_mints_nothing_and_only_uses_the_port() -> None:
+    tree = ast.parse((PACKAGE_DIR / ORCHESTRATOR_MODULE).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in CAPABILITY_MINTERS, node.lineno
+        if isinstance(node, ast.Attribute):
+            assert not node.attr.startswith("_check_"), node.lineno  # programmer internals
+    assert _first_request_byte_free(tree)
+
+
+def _first_request_byte_free(tree: ast.AST) -> bool:
+    return all(_first_request_byte(node) is None for node in ast.walk(tree))
+
+
+def test_the_writer_scan_sees_path_open_writes() -> None:
+    """Milestone 7d closed this gap: ``Path.open("wb")`` carries its mode first."""
+    vault = (PACKAGE_DIR / "tuning" / "backup_vault.py").read_text(encoding="utf-8")
+    journal = (PACKAGE_DIR / "tuning" / "flash_journal.py").read_text(encoding="utf-8")
+    assert '.open("xb")' in vault and '.open("wb")' in journal
