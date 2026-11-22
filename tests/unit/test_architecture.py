@@ -11,10 +11,13 @@ These rules used to exist only in docs/architecture.md; here they are enforced:
 
 from __future__ import annotations
 
+import argparse
 import ast
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 import iran_obd_tuner
 
@@ -36,7 +39,14 @@ ALLOWED: dict[str, set[str]] = {
 #: (layer, module-level third-party top-level package) pairs that are allowed.
 MODULE_LEVEL_THIRD_PARTY: set[tuple[str, str]] = {("ui", "PySide6"), ("app", "PySide6")}
 #: Qt may be imported at module level by these files only (CLI and wiring stay Qt-free).
-QT_FREE_FILES = {"ui/__init__.py", "ui/i18n.py", "ui/backend.py", "app/cli.py", "app/dashboard.py"}
+QT_FREE_FILES = {
+    "ui/__init__.py",
+    "ui/i18n.py",
+    "ui/backend.py",
+    "app/cli.py",
+    "app/dashboard.py",
+    "app/bench_flash.py",
+}
 
 
 @dataclass(frozen=True)
@@ -51,6 +61,27 @@ def _layer_of(relative: Path) -> str:
     return relative.parts[0] if len(relative.parts) > 1 else ""
 
 
+def _is_first_party_module(name: str) -> bool:
+    if name != ROOT and not name.startswith(f"{ROOT}."):
+        return False
+    path = PACKAGE_DIR.joinpath(*name.split(".")[1:])
+    return path.with_suffix(".py").is_file() or (path / "__init__.py").is_file()
+
+
+def _imported_modules(node: ast.AST) -> list[str]:
+    """Modules an import statement loads (relative imports are refused by their own test).
+
+    Milestone 7e: ``from iran_obd_tuner.hardware import bench_link`` loads the submodule
+    ``iran_obd_tuner.hardware.bench_link``; it used to be recorded as the package only.
+    """
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        submodules = [f"{node.module}.{alias.name}" for alias in node.names]
+        return [node.module] + [name for name in submodules if _is_first_party_module(name)]
+    return []
+
+
 def _imports() -> list[ImportUse]:
     uses: list[ImportUse] = []
     for path in sorted(PACKAGE_DIR.rglob("*.py")):
@@ -58,11 +89,8 @@ def _imports() -> list[ImportUse]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         module_level_nodes = set(map(id, tree.body))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                names = [node.module]
-            else:
+            names = _imported_modules(node)
+            if not names:
                 continue
             for name in names:
                 uses.append(
@@ -1038,3 +1066,126 @@ def test_the_writer_scan_sees_path_open_writes() -> None:
     vault = (PACKAGE_DIR / "tuning" / "backup_vault.py").read_text(encoding="utf-8")
     journal = (PACKAGE_DIR / "tuning" / "flash_journal.py").read_text(encoding="utf-8")
     assert '.open("xb")' in vault and '.open("wb")' in journal
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7e: one wiring point, simulated-only CLI (D7, the exception to ADR 46)
+# --------------------------------------------------------------------------- #
+
+#: The single module where the tuning orchestration meets the hardware bench link.
+BENCH_WIRING_MODULE = "app/bench_flash.py"
+#: The shared, Qt-free reports of a bench session (``ui`` may read them in 7f).
+BENCH_REPORTS_MODULE = "core/bench_reports.py"
+_BENCH_TUNING_IMPORT_NAMES = {
+    f"{ROOT}.tuning.{Path(relative).stem}" for relative in BENCH_TUNING_MODULES
+}
+
+
+def test_the_bench_wiring_is_the_single_meeting_point_of_tuning_and_hardware() -> None:
+    assert (PACKAGE_DIR / BENCH_WIRING_MODULE).exists()
+    assert {BENCH_WIRING_MODULE} == BENCH_LINK_IMPORTERS
+    uses = _imports()
+    tuning_importers = {
+        use.file
+        for use in uses
+        if use.module in _BENCH_TUNING_IMPORT_NAMES and use.layer != "tuning"
+    }
+    link_importers = {use.file for use in uses if use.module == f"{ROOT}.hardware.bench_link"}
+    assert tuning_importers == {BENCH_WIRING_MODULE}, tuning_importers
+    assert link_importers == {BENCH_WIRING_MODULE}, link_importers
+    # nothing reaches the wiring but the CLI (and, from 7f, the dashboard wiring in app)
+    wiring_importers = {use.file for use in uses if use.module == f"{ROOT}.app.bench_flash"}
+    assert wiring_importers <= {"app/cli.py", "app/dashboard.py", "app/gui_main.py"}
+    assert all(not f.startswith(("ui/", "tuning/", "hardware/")) for f in wiring_importers)
+
+
+def test_the_bench_wiring_only_ever_builds_the_default_simulated_link() -> None:
+    tree = ast.parse((PACKAGE_DIR / BENCH_WIRING_MODULE).read_text(encoding="utf-8"))
+    configs, links = [], []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "BenchLinkConfig":
+                configs.append(not node.args and not node.keywords)  # no interface, no channel
+            if node.func.id == "BenchLink":
+                first = node.args[0] if node.args else None
+                links.append(
+                    isinstance(first, ast.Call)
+                    and getattr(first.func, "id", "") == "BenchLinkConfig"
+                    and {k.arg for k in node.keywords} <= {"ecu", "timing"}
+                )
+    assert configs and all(configs), configs
+    assert links and all(links), links
+
+
+def test_the_bench_wiring_mints_nothing_and_composes_no_request() -> None:
+    tree = ast.parse((PACKAGE_DIR / BENCH_WIRING_MODULE).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in CAPABILITY_MINTERS, node.lineno
+        if isinstance(node, ast.Name):
+            assert node.id != "_MINT", node.lineno
+    assert _first_request_byte_free(tree)
+    assert not _bench_flash_references(tree)
+
+
+def test_the_bench_reports_are_passive_and_ui_safe() -> None:
+    tree = ast.parse((PACKAGE_DIR / BENCH_REPORTS_MODULE).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            assert name not in _FILE_WRITE_CALLS | {"open", "send", "write"}, (name, node.lineno)
+        assert _first_request_byte(node) is None, getattr(node, "lineno", "?")
+    imported = {use.module for use in _imports() if use.file == BENCH_REPORTS_MODULE}
+    first_party = {m for m in imported if m.startswith(ROOT)}
+    assert first_party == {f"{ROOT}.core.bench"}, first_party
+    assert not _bench_flash_references(tree)
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--interface", "--channel", "--port", "--adapter", "--bitrate", "--bus", "--target"],
+)
+def test_the_simulated_flash_cli_has_no_way_to_name_real_hardware(option: str) -> None:
+    from iran_obd_tuner.app.cli import build_parser
+
+    parser = build_parser()
+    for argv in (
+        ["bench", "flash-sim", "--output", "x", option, "COM5"],
+        ["bench", "flash-sim", "--output", "x", "--recover", option, "COM5"],
+    ):
+        with pytest.raises(SystemExit) as raised:
+            parser.parse_args(argv)
+        assert raised.value.code == 2
+
+
+def test_the_cli_still_offers_no_rom_edit_or_export() -> None:
+    """ADR 46 stands: flash-sim is the only bench exception, and it is simulated."""
+    from iran_obd_tuner.app.cli import build_parser
+
+    def subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+        action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        return dict(action.choices)
+
+    bench = subcommands(build_parser())["bench"]
+    assert set(subcommands(bench)) == {"inspect", "table", "demo", "flash-sim", "journal"}
+
+
+def test_the_import_scan_sees_every_first_party_import() -> None:
+    """Milestone 7e closed this gap: ``from iran_obd_tuner.hardware import bench_link`` was
+    recorded as ``iran_obd_tuner.hardware`` only, and relative imports were not seen at all,
+    so every "only X may import Y" rule could be bypassed."""
+    relative = [
+        f"{path.relative_to(PACKAGE_DIR).as_posix()}:{node.lineno}"
+        for path in sorted(PACKAGE_DIR.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.ImportFrom) and node.level > 0
+    ]
+    assert relative == []  # absolute imports only, so the scan below sees all of them
+    sneaky = ast.parse(
+        "\n".join(
+            [f"from {ROOT}.hardware import bench_link, BENCH_X", f"from {ROOT} import __version__"]
+        )
+    )
+    found = [name for node in sneaky.body for name in _imported_modules(node)]
+    assert found == [f"{ROOT}.hardware", f"{ROOT}.hardware.bench_link", ROOT]

@@ -18,11 +18,19 @@ Commands:
 * ``bench inspect|table|demo`` - offline ROM file analysis (Phase 4): size, SHA-256, CRC32,
   observed ASCII strings, map definitions, decoded tables and checksum status. Read-only:
   editing and exporting a modified copy are dashboard-only; nothing is sent to any ECU.
+* ``bench flash-sim`` / ``bench journal show|discard-stale`` - (Milestone 7e, decision D7, the
+  one controlled exception to ADR 46) the four-stage bench flash and its recovery against
+  the **simulated** programmable ECU only, wired by ``app/bench_flash.py``. There is no
+  interface, channel or port option: no real ECU, adapter or port can be reached from here.
+  Without ``--rom`` the SIMULATED demo ROM is flashed. ``--fault`` injects one deterministic
+  simulator fault. Everything (journal, backups, simulated ECU state) lives in ``--output``.
 
 Output is ASCII English so that it stays readable in any terminal, in logs and in CI.
 Persian language output belongs to the future UI layer, not to the CLI.
 
-Exit codes: ``0`` success, ``1`` runtime failure, ``2`` usage or configuration error,
+Exit codes: ``0`` success, ``1`` runtime failure (for ``bench flash-sim``: also a run that
+stopped before any erase), ``2`` usage or configuration error (also an image the flash plan
+refuses), ``3`` (``bench flash-sim``) the run left a dirty journal - recovery required,
 ``130`` interrupted (Ctrl+C).
 """
 
@@ -39,6 +47,14 @@ from pathlib import Path
 from iran_obd_tuner import __title__, __version__
 from iran_obd_tuner.app.application import Application, uds_link_config
 from iran_obd_tuner.app.bench import AppBenchWorkspace
+from iran_obd_tuner.core.bench import FlashProgress
+from iran_obd_tuner.core.bench_reports import (
+    BENCH_REPORT_SCHEMA_VERSION,
+    BenchFlashReport,
+    BenchJournalReport,
+    BenchJournalStatus,
+    SimulatedFault,
+)
 from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings, load_settings
 from iran_obd_tuner.core.exceptions import (
     AdapterNotFoundError,
@@ -70,6 +86,7 @@ __all__ = ["build_parser", "main"]
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
+EXIT_RECOVERY_REQUIRED = 3
 EXIT_INTERRUPTED = 130
 
 _LOG = get_logger("app.cli")
@@ -203,7 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     bench = subparsers.add_parser(
         "bench",
-        help="offline ROM file analysis (read-only; nothing is sent to any ECU)",
+        help="offline ROM file analysis (read-only), and SIMULATED bench flashing against the "
+        "virtual programmable ECU only (flash-sim, journal)",
     )
     bench_commands = bench.add_subparsers(dest="bench_command", required=True)
     b_inspect = bench_commands.add_parser(
@@ -227,6 +245,54 @@ def build_parser() -> argparse.ArgumentParser:
         "demo", help="write the SIMULATED demo ROM and its definitions to a folder"
     )
     b_demo.add_argument("--output", type=Path, required=True, metavar="DIR")
+    # Milestone 7e (D7): simulated only - deliberately no --interface / --channel / --port
+    b_flash = bench_commands.add_parser(
+        "flash-sim",
+        help="SIMULATED bench flash (or --recover) against the virtual programmable ECU only",
+    )
+    b_flash.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        metavar="DIR",
+        help="bench directory: journal, backups and the simulated ECU state",
+    )
+    b_flash.add_argument(
+        "--rom", type=Path, default=None, metavar="PATH", help="raw image (default: SIMULATED demo)"
+    )
+    b_flash.add_argument(
+        "--maps", type=Path, default=None, metavar="DEFS", help="definitions with checksum blocks"
+    )
+    b_flash.add_argument(
+        "--fault",
+        default=None,
+        metavar="FAULT",
+        help="inject one simulator fault: drop-at-block=N | nrc72-at-block=N | "
+        "power-loss-at-block=N | bad-key | corrupt-readback",
+    )
+    b_flash.add_argument(
+        "--allow-unverified-checksum-in-simulation",
+        action="store_true",
+        help="flash an image whose checksums are not all valid (simulated target only)",
+    )
+    b_flash.add_argument(
+        "--recover",
+        action="store_true",
+        help="restore the verified backup recorded in the dirty journal of --output",
+    )
+    b_flash.add_argument("--json", action="store_true", help="print JSON")
+    b_journal = bench_commands.add_parser(
+        "journal", help="inspect or acknowledge the flash journal of a bench directory"
+    )
+    journal_commands = b_journal.add_subparsers(dest="journal_command", required=True)
+    j_show = journal_commands.add_parser("show", help="clean / stale / dirty / corrupt verdict")
+    j_show.add_argument("directory", type=Path, metavar="DIR")
+    j_show.add_argument("--json", action="store_true", help="print JSON")
+    j_discard = journal_commands.add_parser(
+        "discard-stale",
+        help="archive a stale journal (the ECU was never erased); dirty journals are refused",
+    )
+    j_discard.add_argument("directory", type=Path, metavar="DIR")
     return parser
 
 
@@ -663,6 +729,10 @@ _OFFLINE_NOTE = "offline file analysis only - nothing is read from or written to
 def _cmd_bench(args: argparse.Namespace, settings: AppSettings) -> int:
     if args.bench_command == "demo":
         return _bench_demo(args.output)
+    if args.bench_command == "flash-sim":
+        return _bench_flash_sim(args)
+    if args.bench_command == "journal":
+        return _bench_journal(args)
     bench = AppBenchWorkspace(settings.output_dir)
     if args.bench_command == "inspect":
         return _bench_inspect(bench, args)
@@ -790,6 +860,226 @@ def _bench_table(bench: AppBenchWorkspace, args: argparse.Namespace) -> int:
     print(f"{y_unit + ' / ' + x_unit:>14} " + " ".join(f"{x:>9g}" for x in x_values))
     for r, row in enumerate(table.current):
         print(f"{y_values[r]:>14g} " + " ".join(f"{v:>9g}" for v in row))
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# bench flash-sim / bench journal (Milestone 7e: simulated ECU only)
+# --------------------------------------------------------------------------- #
+
+_SIM_NOTE = (
+    "SIMULATED bench flash - virtual programmable ECU on the in-process virtual bus only; "
+    "no real ECU, adapter or port is used"
+)
+
+
+def _quoted(path: Path) -> str:
+    text = str(path)
+    return f'"{text}"' if any(c.isspace() for c in text) else text
+
+
+def _recover_command(directory: Path) -> str:
+    return f"iran-obd-tuner bench flash-sim --output {_quoted(directory)} --recover"
+
+
+def _journal_next_step(journal: BenchJournalReport, directory: Path) -> str | None:
+    status = journal.status
+    if status is BenchJournalStatus.DIRTY:
+        if journal.can_recover:
+            return _recover_command(directory)
+        return "the dirty journal records no backup: inspect it by hand"
+    if status is BenchJournalStatus.STALE:
+        return f"iran-obd-tuner bench journal discard-stale {_quoted(directory)}"
+    if status is BenchJournalStatus.CORRUPT:
+        return f"inspect {journal.journal_path} by hand; every bench flash is blocked until then"
+    return None
+
+
+class _ProgressPrinter:
+    """Stage-by-stage progress lines (a header per stage, then 25 % steps)."""
+
+    def __init__(self) -> None:
+        self._stage: str | None = None
+        self._message = ""
+        self._done = -1
+        self._quarter = -1
+
+    def __call__(self, report: FlashProgress) -> None:
+        stage = str(report.stage)
+        if stage != self._stage:
+            self._stage, self._message, self._done, self._quarter = stage, "", -1, -1
+            print(f"[{stage}]")
+        if report.message and report.message != self._message and report.total_bytes == 0:
+            self._message = report.message
+            print(f"  {report.message}")
+        if report.total_bytes == 0:
+            return
+        if report.done_bytes < self._done:  # a new read-out or region starts at zero again
+            self._quarter = -1
+        self._done = report.done_bytes
+        quarter = report.done_bytes * 4 // report.total_bytes
+        if quarter > self._quarter and quarter > 0:
+            self._quarter = quarter
+            print(
+                f"  {report.done_bytes}/{report.total_bytes} bytes "
+                f"({100 * report.done_bytes // report.total_bytes}%)"
+            )
+
+
+def _print_journal(journal: BenchJournalReport, directory: Path) -> None:
+    print(f"flash journal: {journal.status.value.upper()} - {journal.detail}")
+    print(f"  directory: {journal.directory}")
+    if journal.state is not None:
+        label = "SIMULATED" if journal.simulated else "NOT SIMULATED"
+        print(f"  journal:   {journal.journal_path}")
+        print(f"  state:     {journal.state}")
+        print(f"  transaction: {journal.transaction_id}")
+        print(f"  target:    {journal.target_id} ({label})")
+        print(f"  image:     {journal.image_name or '-'} sha256 {journal.image_sha256}")
+        if journal.backup_path is not None:
+            print(f"  backup:    {journal.backup_path}")
+            print(f"  backup sha256: {journal.backup_sha256}")
+        if journal.progress:
+            progress = journal.progress
+            print(
+                f"  progress:  {progress.get('stage')} {progress.get('done_bytes')}/"
+                f"{progress.get('total_bytes')} bytes (last saved)"
+            )
+        if journal.abort_reason:
+            print(f"  stopped because: {journal.abort_reason}")
+        if journal.history:
+            print("  history:   " + " -> ".join(state for state, _at in journal.history))
+    if journal.leftover_temp_file:
+        print("  note: a leftover temporary journal file exists (harmless, overwritten next time)")
+    step = _journal_next_step(journal, directory)
+    if step:
+        print(f"next step: {step}")
+
+
+def _bench_flash_sim(args: argparse.Namespace) -> int:
+    from iran_obd_tuner.app.bench_flash import (
+        BenchFlashService,
+        FlashBlockedError,
+        FlashPlanError,
+    )
+
+    directory: Path = args.output
+    if args.recover and (
+        args.rom or args.maps or args.fault or args.allow_unverified_checksum_in_simulation
+    ):
+        raise ConfigurationError(
+            "--recover restores the backup recorded in the journal; it takes no --rom, --maps, "
+            "--fault or --allow-unverified-checksum-in-simulation"
+        )
+    fault: SimulatedFault | None = None
+    if args.fault:
+        try:
+            fault = SimulatedFault.parse(args.fault)
+        except ValueError as exc:
+            raise ConfigurationError(f"--fault: {exc}") from exc
+    service = BenchFlashService()
+    printer = None if args.json else _ProgressPrinter()
+    if not args.json:
+        print(_SIM_NOTE)
+        if fault is not None:
+            print(f"injected simulator fault: {fault.describe()}")
+    try:
+        if args.recover:
+            report = service.run_simulated_recovery(directory, progress=printer)
+        else:
+            report = service.run_simulated_flash(
+                directory,
+                rom_path=args.rom,
+                maps_path=args.maps,
+                fault=fault,
+                allow_unverified_checksum_in_simulation=args.allow_unverified_checksum_in_simulation,
+                progress=printer,
+            )
+    except FlashPlanError as exc:
+        print(f"error: the flash plan refuses this image: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except FlashBlockedError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        step = _journal_next_step(service.assess_journal(directory), directory)
+        if step:
+            print(f"next step: {step}", file=sys.stderr)
+        return EXIT_FAILURE
+    journal = service.assess_journal(directory)
+    next_step = _recover_command(directory) if report.recovery_required else None
+    if args.json:
+        payload = {
+            "kind": "bench_flash_simulation",
+            "schema_version": BENCH_REPORT_SCHEMA_VERSION,
+            "simulated": True,
+            "note": _SIM_NOTE,
+            "result": report.as_dict(),
+            "journal": journal.as_dict(),
+            "next_step": next_step,
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        _print_flash_report(report, journal, directory)
+    if report.ok:
+        return EXIT_OK
+    return EXIT_RECOVERY_REQUIRED if report.recovery_required else EXIT_FAILURE
+
+
+def _print_flash_report(
+    report: BenchFlashReport, journal: BenchJournalReport, directory: Path
+) -> None:
+    origin = "SIMULATED demo" if report.image_simulated else "file"
+    what = "restored backup" if report.mode == "recovery" else f"image ({origin})"
+    print(f"{what}: {report.image_name}")
+    print(f"  sha256: {report.image_sha256}")
+    if report.unverified_checksum_override:
+        print("  WARNING: flashed with an unverified checksum (simulation-only override)")
+    print("journal states: " + " -> ".join(str(state) for state in report.states))
+    if report.fault is not None and report.fault_fired is False:
+        print(f"note: the injected fault {report.fault.describe()} did not fire")
+    if report.backup_path is not None:
+        print(f"backup: {report.backup_path} ({report.backup_size} bytes)")
+        print(f"backup sha256: {report.backup_sha256}")
+    result = report.state.value.upper()
+    if report.ok:
+        print(f"result: {result} ({report.mode} verified by check routine and read-back)")
+        ident = ", ".join(f"{did}={value}" for did, value in report.identity_after.items())
+        print(f"identity after reset: {ident}")
+        if report.archive_path:
+            print(f"journal archived: {report.archive_path}")
+    elif report.ecu_untouched:
+        print(f"result: {result} before any erase - the simulated ECU memory is untouched")
+        print(f"  reason: {report.error}")
+        if report.archive_path:
+            print(f"journal archived: {report.archive_path}")
+    else:
+        print(f"result: {result} - the simulated ECU memory may be incomplete")
+        print(f"  reason: {report.error}")
+    print(f"journal now: {journal.status.value.upper()} ({journal.journal_path})")
+    if report.recovery_required:
+        print("RECOVERY REQUIRED - every new flash is blocked until the backup is restored:")
+        print(f"  {_recover_command(directory)}")
+
+
+def _bench_journal(args: argparse.Namespace) -> int:
+    from iran_obd_tuner.app.bench_flash import BenchFlashService
+
+    service = BenchFlashService()
+    directory: Path = args.directory
+    if args.journal_command == "discard-stale":
+        archive = service.discard_stale_journal(directory)
+        print(f"stale flash journal archived to {archive} (the simulated ECU was never erased)")
+        return EXIT_OK
+    journal = service.assess_journal(directory)
+    if args.json:
+        payload = {
+            "kind": "bench_flash_journal",
+            "schema_version": BENCH_REPORT_SCHEMA_VERSION,
+            "journal": journal.as_dict(),
+            "next_step": _journal_next_step(journal, directory),
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        _print_journal(journal, directory)
     return EXIT_OK
 
 

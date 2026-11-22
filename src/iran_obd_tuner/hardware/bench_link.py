@@ -11,7 +11,10 @@ that does not carry the simulator prefix (so a real port name like ``COM5`` or
 ``PCAN_USBBUS1`` can never be typed in by mistake). There is no fallback of any kind.
 
 This is the only module that may create the programmer and the programmable simulator's
-server (architecture test).
+server (architecture test). It is also the only door to the simulator for the ``app`` wiring
+(Milestone 7e): :func:`simulated_bench_ecu` builds the simulated ECU (factory fresh or booted
+from a saved :class:`SimulatedEcuState`, optionally with a :class:`FaultPlan`), and
+:func:`simulated_seed_key` returns the simulated target's published seed-key provider.
 """
 
 from __future__ import annotations
@@ -19,12 +22,16 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from iran_obd_tuner.core.bench import SIMULATED_BENCH_TARGET, BenchTargetProfile
+from iran_obd_tuner.core.bench import SIMULATED_BENCH_TARGET, BenchTargetProfile, SeedKeyProvider
 from iran_obd_tuner.core.exceptions import BenchTargetNotQualifiedError, ConfigurationError
 from iran_obd_tuner.core.traffic import TrafficLog
 from iran_obd_tuner.hardware.bench_programmer import BenchProgrammer, BenchTiming
 from iran_obd_tuner.hardware.can_bus import PythonCanBus
 from iran_obd_tuner.hardware.uds_sim_programmable import (
+    FaultPlan,
+    ProgrammableEcuConfig,
+    SimulatedEcuState,
+    SimulatedXorSeedKey,
     VirtualProgrammableEcu,
     VirtualProgrammableEcuServer,
 )
@@ -35,6 +42,11 @@ __all__ = [
     "BENCH_SIM_CHANNEL_PREFIX",
     "BenchLink",
     "BenchLinkConfig",
+    "BenchTiming",
+    "FaultPlan",
+    "SimulatedEcuState",
+    "simulated_bench_ecu",
+    "simulated_seed_key",
 ]
 
 #: The only bench interface of this build: virtual bus + virtual programmable ECU.
@@ -43,6 +55,28 @@ BENCH_LINK_INTERFACES: tuple[str, ...] = (BENCH_SIMULATED_INTERFACE,)
 #: Every simulated bench channel starts with this (generated when none is given).
 BENCH_SIM_CHANNEL_PREFIX = "bench-sim-"
 _MAX_STANDARD_ID = 0x7FF
+
+
+def simulated_bench_ecu(
+    *,
+    state: SimulatedEcuState | None = None,
+    faults: FaultPlan | None = None,
+    max_block_length: int = 258,
+) -> VirtualProgrammableEcu:
+    """A virtual programmable ECU for :data:`SIMULATED_BENCH_TARGET` (simulated only).
+
+    Args:
+        state: Boot from this saved persistent state (a power cycle); factory fresh if ``None``.
+        faults: Deterministic fault plan (each fault fires once).
+        max_block_length: ``maxNumberOfBlockLength`` the simulator announces.
+    """
+    config = ProgrammableEcuConfig(target=SIMULATED_BENCH_TARGET, max_block_length=max_block_length)
+    return VirtualProgrammableEcu(config, faults, state=state)
+
+
+def simulated_seed_key() -> SeedKeyProvider:
+    """The simulated target's published seed-key (protects nothing; no real algorithm)."""
+    return SimulatedXorSeedKey(SIMULATED_BENCH_TARGET.security_level)
 
 
 @dataclass(frozen=True, slots=True)

@@ -26,6 +26,10 @@ time only through an injectable clock):
   ``0x11 01``. Every other service is answered ``0x11`` serviceNotSupported.
 * **Fault injection** - :class:`FaultPlan`; each fault fires once, so the recovery that
   follows can be tested deterministically.
+* **Persistence (Milestone 7e)** - :meth:`VirtualProgrammableEcu.persistent_state` returns
+  exactly the persistent part (:class:`SimulatedEcuState`), and a new simulator can boot
+  from it. This lets the CLI keep one simulated bench ECU across processes (a new process
+  is a power cycle), so a recovery in a later run meets the half-written flash.
 
 :class:`VirtualProgrammableEcuServer` runs the handler on python-can's in-process
 ``virtual`` bus only; it has no parameter that could name another interface.
@@ -52,6 +56,7 @@ __all__ = [
     "SIMULATED_SEED_KEY_MASK",
     "FaultPlan",
     "ProgrammableEcuConfig",
+    "SimulatedEcuState",
     "SimulatedXorSeedKey",
     "VirtualProgrammableEcu",
     "VirtualProgrammableEcuServer",
@@ -255,6 +260,28 @@ class _Transfer:
         return self.offset >= self.size
 
 
+@dataclass(frozen=True, slots=True)
+class SimulatedEcuState:
+    """The persistent part of a :class:`VirtualProgrammableEcu` (survives a power cycle).
+
+    Attributes:
+        flash: Flash content in image order.
+        valid_crc: The bootloader's validity record (CRC32 of the flash recorded by the last
+            passing checkMemory), ``None`` when no valid application is recorded.
+        failed_key_attempts: Wrong keys counted so far.
+    """
+
+    flash: bytes
+    valid_crc: int | None
+    failed_key_attempts: int
+
+    def __post_init__(self) -> None:
+        if self.valid_crc is not None and not 0 <= self.valid_crc <= 0xFFFF_FFFF:
+            raise ValueError("valid_crc must be a CRC32 or None")
+        if self.failed_key_attempts < 0:
+            raise ValueError("failed_key_attempts must not be negative")
+
+
 class VirtualProgrammableEcu:
     """Pure request -> responses simulator of a bootloader-capable ECU (see module doc).
 
@@ -262,6 +289,8 @@ class VirtualProgrammableEcu:
         config: Behaviour and memory layout.
         faults: Fault injection plan (default: none).
         clock: Monotonic clock for the security delay.
+        state: Boot from this persistent state instead of the factory image (it must not be
+            combined with ``config.initial_image``).
     """
 
     def __init__(
@@ -270,16 +299,26 @@ class VirtualProgrammableEcu:
         faults: FaultPlan | None = None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        state: SimulatedEcuState | None = None,
     ) -> None:
         self.config = config or ProgrammableEcuConfig()
         self.faults = faults or FaultPlan()
         self._clock = clock
         target = self.config.target
-        image = self.config.initial_image or default_simulated_image(target)
         # persistent state (survives reset and power loss)
-        self._flash = bytearray(image)
-        self._valid_crc: int | None = zlib.crc32(self._flash)  # factory flashed and checked
-        self._failed_keys = 0
+        if state is None:
+            image = self.config.initial_image or default_simulated_image(target)
+            self._flash = bytearray(image)
+            self._valid_crc: int | None = zlib.crc32(self._flash)  # factory flashed and checked
+            self._failed_keys = 0
+        else:
+            if self.config.initial_image is not None:
+                raise ValueError("pass either a persistent state or an initial image, not both")
+            if len(state.flash) != target.image_size:
+                raise ValueError("the persistent state does not have the target's image size")
+            self._flash = bytearray(state.flash)
+            self._valid_crc = state.valid_crc
+            self._failed_keys = state.failed_key_attempts
         # bookkeeping visible to tests
         self.requests: list[bytes] = []
         self.powered = True
@@ -297,6 +336,10 @@ class VirtualProgrammableEcu:
         self._transfer: _Transfer | None = None
         exhausted = self._failed_keys >= self.config.security_max_attempts
         self._delay_until = self._clock() + self.config.security_delay_s if exhausted else 0.0
+
+    def persistent_state(self) -> SimulatedEcuState:
+        """What survives a power cycle (flash, validity record, failed key counter)."""
+        return SimulatedEcuState(bytes(self._flash), self._valid_crc, self._failed_keys)
 
     @property
     def flash(self) -> bytes:

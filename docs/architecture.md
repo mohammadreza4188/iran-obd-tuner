@@ -80,7 +80,7 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `hardware/isotp.py` | ISO-TP خودِ پروژه: `IsoTpChannel` (SF/FF/CF/FC، BS، STmin، Wait)، `functional_request` | پیاده‌شده |
 | `hardware/uds.py` | `UdsClient` فقط‌خواندنی، فهرست سفید `check_request_allowed`، NRCها، decode DTC، `discover_ecus` | پیاده‌شده |
 | `hardware/uds_sim.py` | `SimulatedUdsEcu` قطعی + `VirtualBusEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
-| `hardware/uds_sim_programmable.py` | (Milestone 7b) `VirtualProgrammableEcu`: سمت ECU شبیه‌سازی‌شده برنامه‌ریزی Bench (فلش NOR، bootloader، seed-key با شمارنده تلاش و تأخیر، erase/checkMemory، دانلود/آپلود بلوکی)، `FaultPlan`، `SimulatedXorSeedKey` و `VirtualProgrammableEcuServer` (فقط باس `virtual`) | پیاده‌شده (شبیه‌سازی) |
+| `hardware/uds_sim_programmable.py` | (Milestone 7b) `VirtualProgrammableEcu`: سمت ECU شبیه‌سازی‌شده برنامه‌ریزی Bench (فلش NOR، bootloader، seed-key با شمارنده تلاش و تأخیر، erase/checkMemory، دانلود/آپلود بلوکی)، `FaultPlan`، `SimulatedXorSeedKey`، `VirtualProgrammableEcuServer` (فقط باس `virtual`) و از 7e `SimulatedEcuState` (حالت پایدار برای راه‌اندازی دوباره) | پیاده‌شده (شبیه‌سازی) |
 | `hardware/bench_programmer.py` | (Milestone 7c) `BenchProgrammer`: **تنها ماژولی که درخواست برنامه‌ریزی می‌سازد**؛ فهرست سفید Bench (`check_bench_request`)، حلقه درخواست/پاسخ مستقل از `uds.py`، بررسی capability در اولین دستور هر متد، تکرار محدود `0x36` | پیاده‌شده (فقط شبیه‌ساز) |
 | `hardware/bench_link.py` | (Milestone 7c) `BenchLink`/`BenchLinkConfig`: فقط `virtual-sim-programmable` (باس virtual + ECU برنامه‌پذیر شبیه‌سازی‌شده)؛ هر رابط یا کانال دیگری رد می‌شود | پیاده‌شده (فقط شبیه‌ساز) |
 | `hardware/uds_link.py` | `UdsLink`/`UdsLinkConfig`: رابط CAN ← ISO-TP ← `UdsClient`؛ `virtual-sim` = باس مجازی + ECU شبیه‌سازی | پیاده‌شده |
@@ -119,8 +119,10 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `tuning/backup_vault.py` | (Milestone 7d) **تنها سازنده `BackupReceipt`**: دو خواندن برابر، نوشتن یک‌باره (`xb`)، مانیفست، بازخوانی از دیسک | پیاده‌شده |
 | `tuning/flash_journal.py` | (Milestone 7d) ژورنال اتمیک تراکنش، قفل تک‌نمونه، `JournalInspector` و `RecoveryAssessment`، بایگانی | پیاده‌شده |
 | `tuning/flash_orchestrator.py` | (Milestone 7d) `BenchFlashOrchestrator`: چهار مرحله و بازیابی، فقط روی `BenchProgrammerPort` | پیاده‌شده (فقط شبیه‌ساز) |
+| `core/bench_reports.py` | (Milestone 7e) گزارش‌های ساده و بدون Qt جلسه Bench برای CLI و UI: `BenchJournalReport` (`clean`/`stale`/`dirty`/`corrupt`)، `BenchFlashReport`، `SimulatedFault` | پیاده‌شده |
 | `tuning/demo.py`, `tuning/data/demo_maps.json` | ROM نمایشی شبیه‌سازی‌شده و تعریف نقشه‌هایش | پیاده‌شده (شبیه‌سازی) |
 | `app/bench.py`, `ui/bench_view.py` | `AppBenchWorkspace` (پیاده‌سازی Protocol `BenchWorkspace`) و تب «میز کار ROM» | پیاده‌شده |
+| `app/bench_flash.py` | (Milestone 7e) `BenchFlashService`: **تنها نقطه اتصال** هماهنگ‌کننده `tuning` به `hardware/bench_link.py`؛ `assess_journal`، `run_simulated_flash`، `run_simulated_recovery`، `discard_stale_journal`؛ ذخیره حالت پایدار ECU شبیه‌سازی‌شده بین اجراها | پیاده‌شده (فقط شبیه‌ساز) |
 | `app/cli.py`, `app/application.py` | CLI و سیم‌کشی | پیاده‌شده |
 | `app/dashboard.py` | `AppDashboardBackend`: انتخاب آداپتور برای حالت شبیه‌سازی/واقعی | پیاده‌شده |
 | `app/gui_main.py` | ورودی داشبورد (`iran-obd-tuner-gui`): تنظیمات + لاگ + backend | پیاده‌شده (نیازمند `[gui]`) |
@@ -342,6 +344,29 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
       bootloader یا هویت همان application پشتیبان را می‌پذیرد، و مراحل ۳ و ۴ را با تصویر پشتیبان اجرا
       می‌کند. مسیرهای `recovery_failed` به `recovering` و «پروسه وسط انتقال مُرد» هم پوشش داده
       شده‌اند.
+  - **CLI فلش شبیه‌سازی‌شده (Milestone 7e، تصمیم D7، استثنای کنترل‌شده ADR ۴۶):**
+    `app/bench_flash.py` تنها ماژولی است که هم ماژول‌های فلش `tuning` و هم `hardware/bench_link.py`
+    را import می‌کند (تست AST). `cli.py` فقط از همین facade استفاده می‌کند.
+    - `BenchLinkConfig` همیشه بدون آرگومان ساخته می‌شود، یعنی بدون رابط و بدون کانال (تست AST).
+      `bench flash-sim` هیچ گزینه `--interface`، `--channel`، `--port` یا `--adapter` ندارد (تست
+      parser). ADR ۴۶ پابرجاست: CLI همچنان ویرایش یا خروجی ROM ندارد.
+    - دستورها: `bench flash-sim --output DIR [--rom PATH --maps DEFS] [--fault ...]
+      [--allow-unverified-checksum-in-simulation] [--json]`، `bench flash-sim --output DIR --recover`،
+      `bench journal show DIR [--json]` و `bench journal discard-stale DIR`. بدون `--rom`، ROM نمایشی
+      SIMULATED و تعریف‌هایش استفاده می‌شوند.
+    - کد خروج `3` یعنی ژورنال dirty مانده و بازیابی لازم است؛ دستور دقیق `--recover` چاپ می‌شود. کد
+      `1` یعنی توقف پیش از erase یا رد شدن توسط ژورنال یا gate. کد `2` یعنی ورودی نادرست، از جمله
+      تصویری که flash plan رد می‌کند (مثلاً چک‌سام نامعتبر بدون override شبیه‌سازی).
+    - attestation جلسه CLI را سرویس می‌سازد (`simulated=True`، اپراتور «CLI (simulated session)»).
+      جملات آن میز *مجازی* را توصیف می‌کنند و gate آن را فقط برای شبیه‌ساز می‌پذیرد.
+    - همه چیز در `DIR` می‌ماند: ژورنال و بایگانی آن، پشتیبان‌ها در `backups/` و
+      `SIMULATED-bench-ecu-state.json`. این فایل حالت پایدار ECU شبیه‌سازی‌شده است: فلش، رکورد اعتبار
+      و شمارنده کلید غلط. پس از هر اجرا به‌صورت اتمیک ذخیره می‌شود، و فایل خراب fail-closed است. هر
+      اجرای تازه CLI برای ECU شبیه‌سازی‌شده یک power cycle است، پس `--recover` با همان فلش نیمه‌نوشته
+      روبه‌رو می‌شود.
+    - faultها: `drop-at-block=N`، `nrc72-at-block=N`، `power-loss-at-block=N` (N از ۱ تا ۶۴؛ بلوک ۱ KiB)،
+      `bad-key` و `corrupt-readback`. مورد آخر فقط برای read-back مرحله ۴ مسلح می‌شود؛ اگر از ابتدا
+      مسلح شود، دو خواندن پشتیبان را نابرابر می‌کند.
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -500,6 +525,11 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۶۷ | (Milestone 7d) ژورنال پیش از هر مرحله و اتمیک؛ قفل O_EXCL که خودکار شکسته نمی‌شود؛ ژورنال خراب = fail-closed | پس از crash ژورنال هرگز کمتر از آنچه ممکن است رخ داده باشد ادعا نمی‌کند؛ تشخیص زنده بودن PID در ویندوز با `os.kill` خطرناک است | شکستن خودکار قفل کهنه |
 | ۶۸ | (Milestone 7d) تکرار محدود `os.replace`/unlink در برابر `PermissionError` (۲۰ بار، ۵۰ ms) | در اجرای تست‌ها روی ویندوز دیده شد: اسکن آنتی‌ویروس فایل تازه را لحظه‌ای باز نگه می‌دارد و rename رد می‌شود؛ همین روی لپ‌تاپ میدانی وسط فلش رخ می‌دهد | شکست فوری (فلش بی‌دلیل interrupted می‌شد) |
 | ۶۹ | (Milestone 7d) گارد نویسنده فایل در `tuning` حالت `Path.open(mode)` را هم می‌بیند | اسکن قبلی فقط آرگومان دوم `open(path, mode)` را می‌خواند و `Path.open("wb")` از آن رد می‌شد | فقط `open` داخلی |
+| ۷۰ | (Milestone 7e، تصمیم D7) `bench flash-sim` و `bench journal` در CLI فقط برای ECU شبیه‌سازی‌شده؛ استثنای کنترل‌شده ADR ۴۶ | بازیابی و تزریق خطا باید بدون GUI و به‌طور قطعی قابل تکرار و تست باشد؛ نبودِ هر گزینه رابط/کانال/درگاه و ساخت `BenchLinkConfig()` بدون آرگومان با تست AST و parser قفل است | فلش فقط از GUI؛ گزینه `--interface` با رد در زمان اجرا |
+| ۷۱ | (Milestone 7e) `app/bench_flash.py` تنها نقطه اتصال `tuning` و `hardware` برای فلش Bench؛ خروجی آن گزارش‌های ساده `core/bench_reports.py` است، نه `RecoveryAssessment` | `ui` اجازه import از `tuning` ندارد (ADR ۱۳ و ۴۰)؛ CLI و داشبورد 7f یک facade و یک مدل مشترک دارند | بازگرداندن مستقیم انواع `tuning` به UI |
+| ۷۲ | (Milestone 7e) حالت پایدار ECU شبیه‌سازی‌شده (`SimulatedEcuState`) در پوشه Bench ذخیره و هر اجرای CLI یک power cycle است | بدون آن، `--recover` در فرایند جدید با ECU کارخانه‌ای روبه‌رو می‌شد و بازیابی فلش نیمه‌نوشته را واقعاً آزمایش نمی‌کرد | ECU تازه در هر اجرا |
+| ۷۳ | (Milestone 7e) `corrupt-readback` فقط هنگام شروع مرحله ۴ مسلح می‌شود | `FaultPlan` بلوک‌ها را در هر انتقال می‌شمارد؛ مسلح از ابتدا، اولین خواندن پشتیبان را خراب و فلش را پیش از erase متوقف می‌کرد | شمارش سراسری بلوک‌ها در شبیه‌ساز |
+| ۷۴ | (Milestone 7e) اسکن import در تست معماری `from pkg import submodule` را به‌صورت `pkg.submodule` ثبت می‌کند و import نسبی در `src` ممنوع است | تست جهش نشان داد `from iran_obd_tuner.hardware import bench_link` فقط `iran_obd_tuner.hardware` ثبت می‌شد و import نسبی اصلاً دیده نمی‌شد؛ پس هر قاعده «فقط X اجازه import از Y دارد» دورزدنی بود | فقط `node.module` |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)
@@ -555,6 +585,12 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
     از رابط CAN واقعی را تا اعتبارسنجی جداگانه ممنوع کرده است.
 20. **`AT PC` و رفتار حافظه پروتکل کلون‌ها** روی سخت‌افزار واقعی بررسی نشده‌اند؛ اینکه جستجوی خودکار
     `AT TP 0` در کلون‌ها پروتکل را در حافظه ذخیره می‌کند یا نه، باید روی میز کار دیده شود.
+21. **(یافته Milestone 7e، منتظر تصمیم صاحب پروژه)** اگر fault در مرحله `verifying` رخ دهد (مثلاً
+    `corrupt-readback`)، ECU تصویر جدید کامل و بررسی‌شده را اجرا می‌کند و DID نسخه نرم‌افزار (`F189`) آن
+    عوض شده است. پیوند هویت برنامه‌ریز (ADR ۶۳) این ECU را «ECU دیگر» می‌داند و نوشتن پشتیبان را پیش از
+    هر erase رد می‌کند. نتیجه `recovery_failed` است و این ژورنال dirty از راه بازیابی پاک نمی‌شود. رفتار
+    fail-closed و ایمن است، اما راه خروج ندارد. بررسی `in_bootloader` در هماهنگ‌کننده هم ضعیف‌تر از
+    هدفش است: الگوی bootloader (`F191`) با هویت application هم جور درمی‌آید.
 
 ### تصمیم‌هایی که نیازمند تأیید تیم است
 
