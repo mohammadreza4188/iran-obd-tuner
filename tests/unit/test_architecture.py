@@ -1189,3 +1189,30 @@ def test_the_import_scan_sees_every_first_party_import() -> None:
     )
     found = [name for node in sneaky.body for name in _imported_modules(node)]
     assert found == [f"{ROOT}.hardware", f"{ROOT}.hardware.bench_link", ROOT]
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7e.1: backups are bound to the unit, never to the full identity
+# --------------------------------------------------------------------------- #
+
+#: Modules that may compute the full identity fingerprint - to *record* it, never to bind.
+FULL_FINGERPRINT_RECORDERS = {"tuning/backup_vault.py", "tuning/flash_journal.py"}
+
+
+def test_nothing_binds_a_backup_to_the_full_identity_fingerprint() -> None:
+    """The full fingerprint includes the software DIDs, so it changes with every flash; a
+    binding on it made the recovery after a verify-stage fault impossible (ADR 75)."""
+    callers = []
+    for relative, tree in _package_trees():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "fingerprint"
+            ):
+                callers.append(relative)
+    assert set(callers) <= FULL_FINGERPRINT_RECORDERS, callers
+    assert callers  # the scan sees the recorders
+    for module in (PROGRAMMER_MODULE, ORCHESTRATOR_MODULE):
+        tree = ast.parse((PACKAGE_DIR / module).read_text(encoding="utf-8"))
+        assert _call_lines(tree, "unit_fingerprint"), module  # they bind to the unit

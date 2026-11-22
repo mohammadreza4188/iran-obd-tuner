@@ -52,6 +52,7 @@ __all__ = [
     "DIRTY_JOURNAL_STATES",
     "JOURNAL_TRANSITIONS",
     "SIMULATED_BENCH_TARGET",
+    "SOFTWARE_IDENTIFICATION_DIDS",
     "TERMINAL_JOURNAL_STATES",
     "BackupReceipt",
     "BenchAttestation",
@@ -209,6 +210,19 @@ class MemoryRegion:
         return f"{self.start_address:#010x}..{self.end_address:#010x} ({self.size} bytes)"
 
 
+def _did_digest(pairs: Iterable[tuple[int, str]]) -> str:
+    text = "\n".join(f"{did:04X}={value}" for did, value in sorted(pairs))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+#: ISO 14229-1 software identification DIDs (boot / application software and data ids,
+#: manufacturer and supplier software numbers and versions). A flash changes them, so they
+#: can never identify the physical unit.
+SOFTWARE_IDENTIFICATION_DIDS: Final[frozenset[int]] = frozenset(
+    {0xF180, 0xF181, 0xF182, 0xF188, 0xF189, 0xF194, 0xF195}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class EcuIdentity:
     """Identification DIDs read from an ECU (printable text values only).
@@ -220,9 +234,21 @@ class EcuIdentity:
     dids: Mapping[int, str]
 
     def fingerprint(self) -> str:
-        """SHA-256 over the sorted ``DID=value`` pairs: binds a backup to one ECU."""
-        text = "\n".join(f"{did:04X}={value}" for did, value in sorted(self.dids.items()))
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+        """SHA-256 over all sorted ``DID=value`` pairs (the record of what was read).
+
+        It includes the software DIDs, so it changes with every flash; a backup is bound to
+        the :meth:`unit_fingerprint` instead.
+        """
+        return _did_digest(self.dids.items())
+
+    def unit_fingerprint(self, dids: Iterable[int]) -> str | None:
+        """SHA-256 over the unit DIDs (those a flash cannot change): binds a backup to one
+        physical ECU. ``None`` when one of them was not read (the unit is then not proven).
+        """
+        wanted = sorted(set(dids))
+        if not wanted or any(did not in self.dids for did in wanted):
+            return None
+        return _did_digest((did, self.dids[did]) for did in wanted)
 
     def mismatches(self, patterns: Mapping[int, str]) -> tuple[str, ...]:
         """Human-readable reasons why this identity does not match ``patterns`` (glob)."""
@@ -253,7 +279,12 @@ class BenchTargetProfile:
         sector_size: Erase granularity in bytes.
         identity_patterns: DID -> glob the application identity must match.
         bootloader_identity_patterns: DID -> glob accepted while the ECU runs its bootloader
-            (e.g. after an interrupted flash).
+            (e.g. after an interrupted flash). Such an identity must *not* also match
+            ``identity_patterns``: an ECU that shows its application is not in its bootloader.
+        unit_identity_dids: DIDs that identify the physical unit and that no flash changes
+            (e.g. hardware number and serial number). A backup is bound to them, so the
+            same ECU is recognised after its software changed (Milestone 7e.1); software
+            identification DIDs (:data:`SOFTWARE_IDENTIFICATION_DIDS`) are refused.
         security_level: Odd ``requestSeed`` sub-function (the key uses ``level + 1``).
         seed_key_provider_id: Which :class:`SeedKeyProvider` computes the key.
         erase_routine_id / check_routine_id: UDS 0x31 routine identifiers (target specific).
@@ -269,6 +300,7 @@ class BenchTargetProfile:
     sector_size: int
     identity_patterns: Mapping[int, str]
     bootloader_identity_patterns: Mapping[int, str]
+    unit_identity_dids: tuple[int, ...]
     security_level: int
     seed_key_provider_id: str
     erase_routine_id: int
@@ -297,6 +329,18 @@ class BenchTargetProfile:
         for name in ("erase_routine_id", "check_routine_id"):
             if not 0 <= getattr(self, name) <= 0xFFFF:
                 raise ValueError(f"{name} must be a 16-bit routine identifier")
+        if not self.unit_identity_dids:
+            raise ValueError("a bench target needs unit identity DIDs to bind backups to")
+        if len(set(self.unit_identity_dids)) != len(self.unit_identity_dids):
+            raise ValueError("unit identity DIDs must be unique")
+        for did in self.unit_identity_dids:
+            if not 0 <= did <= 0xFFFF:
+                raise ValueError("unit identity DIDs must be 16-bit identifiers")
+            if did in SOFTWARE_IDENTIFICATION_DIDS:
+                raise ValueError(
+                    f"DID {did:04X} identifies software, which a flash changes; it cannot "
+                    "identify the unit"
+                )
         if self.erase_routine_id == self.check_routine_id:
             raise ValueError("erase and check routines must differ")
         if self.address_and_length_format != 0x44:
@@ -319,6 +363,22 @@ class BenchTargetProfile:
         """The exact ROM image size this target accepts."""
         return sum(region.size for region in self.regions)
 
+    def shows_application(self, identity: EcuIdentity) -> bool:
+        """The ECU runs this target's application (its identity patterns match)."""
+        return not identity.mismatches(self.identity_patterns)
+
+    def shows_bootloader(self, identity: EcuIdentity) -> bool:
+        """The ECU runs this target's bootloader: the bootloader patterns match and the
+        application ones do not (Milestone 7e.1: the bootloader patterns alone also match an
+        application identity)."""
+        return not identity.mismatches(
+            self.bootloader_identity_patterns
+        ) and not self.shows_application(identity)
+
+    def unit_fingerprint(self, identity: EcuIdentity) -> str | None:
+        """:meth:`EcuIdentity.unit_fingerprint` over this target's unit DIDs."""
+        return identity.unit_fingerprint(self.unit_identity_dids)
+
 
 #: The virtual programmable ECU (Milestone 7b): one 64 KiB region in four 16 KiB sectors,
 #: matching the SIMULATED demo ROM (``tuning.demo.DEMO_ROM_SIZE``). Every value is invented
@@ -331,6 +391,7 @@ SIMULATED_BENCH_TARGET: Final[BenchTargetProfile] = BenchTargetProfile(
     sector_size=16 * 1024,
     identity_patterns={0xF187: "SIM-PART-*", 0xF191: "SIM-HW-*"},
     bootloader_identity_patterns={0xF191: "SIM-HW-*"},
+    unit_identity_dids=(0xF191, 0xF18C),  # hardware number, serial number
     security_level=0x01,
     seed_key_provider_id="simulated-xor",
     erase_routine_id=0xFF00,
@@ -519,7 +580,10 @@ class BackupReceipt:
         size: Its size in bytes.
         regions: The regions it contains (in image order).
         target_id: The bench target it was read from.
-        identity_fingerprint: :meth:`EcuIdentity.fingerprint` of the ECU it was read from.
+        identity_fingerprint: :meth:`EcuIdentity.fingerprint` of the ECU it was read from
+            (the full record, software DIDs included).
+        unit_fingerprint: :meth:`BenchTargetProfile.unit_fingerprint` of that ECU - what
+            the backup is bound to (the same unit, whatever software it runs now).
         simulated: ``True`` when read from the virtual programmable ECU.
         created_at: When it was verified (timezone aware).
     """
@@ -530,6 +594,7 @@ class BackupReceipt:
     regions: tuple[MemoryRegion, ...]
     target_id: str
     identity_fingerprint: str
+    unit_fingerprint: str
     simulated: bool
     created_at: datetime
     _token: object = field(repr=False, compare=False)
@@ -540,6 +605,7 @@ class BackupReceipt:
             raise ValueError("a backup receipt needs the backup path")
         _require_sha256(self.sha256, "sha256")
         _require_sha256(self.identity_fingerprint, "identity_fingerprint")
+        _require_sha256(self.unit_fingerprint, "unit_fingerprint")
         if not self.regions:
             raise ValueError("a backup receipt must cover at least one region")
         if self.size != sum(region.size for region in self.regions):
@@ -563,16 +629,24 @@ class BackupReceipt:
                     "refusing to change memory that cannot be restored"
                 )
 
-    def check_for(self, *, target_id: str, identity_fingerprint: str, simulated: bool) -> None:
-        """Refuse a receipt that belongs to another target, another ECU or the other link.
+    def check_for(self, *, target_id: str, unit_fingerprint: str | None, simulated: bool) -> None:
+        """Refuse a receipt that belongs to another target, another unit or the other link.
+
+        ``unit_fingerprint`` is ``None`` when the connected ECU's unit DIDs were not all read:
+        the unit is not proven, so that is refused too.
 
         Raises:
             SafetyGuardError: On any mismatch.
         """
         if target_id != self.target_id:
             raise SafetyGuardError(f"backup is of target {self.target_id!r}, not {target_id!r}")
-        if identity_fingerprint != self.identity_fingerprint:
-            raise SafetyGuardError("backup was read from a different ECU (identity mismatch)")
+        if unit_fingerprint is None:
+            raise SafetyGuardError(
+                "the connected ECU did not report all unit identity DIDs: it cannot be shown to "
+                "be the ECU the backup was read from"
+            )
+        if unit_fingerprint != self.unit_fingerprint:
+            raise SafetyGuardError("backup was read from a different ECU (unit identity mismatch)")
         if simulated != self.simulated:
             raise SafetyGuardError("backup and link disagree about simulation")
 

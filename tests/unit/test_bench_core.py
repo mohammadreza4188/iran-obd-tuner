@@ -82,6 +82,7 @@ def receipt(**overrides: object) -> BackupReceipt:
         "regions": SIMULATED_BENCH_TARGET.regions,
         "target_id": SIMULATED_BENCH_TARGET.target_id,
         "identity_fingerprint": SHA_A,
+        "unit_fingerprint": SHA_A,
         "simulated": True,
         "created_at": NOW,
         "_token": bench._MINT,
@@ -363,13 +364,15 @@ def test_a_receipt_is_bound_to_target_ecu_and_link() -> None:
     backup = receipt()
     target = SIMULATED_BENCH_TARGET.target_id
 
-    backup.check_for(target_id=target, identity_fingerprint=SHA_A, simulated=True)
+    backup.check_for(target_id=target, unit_fingerprint=SHA_A, simulated=True)
     with pytest.raises(SafetyGuardError, match="target"):
-        backup.check_for(target_id="other", identity_fingerprint=SHA_A, simulated=True)
+        backup.check_for(target_id="other", unit_fingerprint=SHA_A, simulated=True)
     with pytest.raises(SafetyGuardError, match="different ECU"):
-        backup.check_for(target_id=target, identity_fingerprint=SHA_B, simulated=True)
+        backup.check_for(target_id=target, unit_fingerprint=SHA_B, simulated=True)
+    with pytest.raises(SafetyGuardError, match="unit identity DIDs"):
+        backup.check_for(target_id=target, unit_fingerprint=None, simulated=True)
     with pytest.raises(SafetyGuardError, match="simulation"):
-        backup.check_for(target_id=target, identity_fingerprint=SHA_A, simulated=False)
+        backup.check_for(target_id=target, unit_fingerprint=SHA_A, simulated=False)
 
 
 # --------------------------------------------------------------------------- progress and ports

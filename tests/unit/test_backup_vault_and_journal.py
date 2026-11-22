@@ -40,7 +40,7 @@ from iran_obd_tuner.tuning.flash_journal import (
 
 TARGET = SIMULATED_BENCH_TARGET
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
-IDENTITY = EcuIdentity({0xF187: "SIM-PART-0001", 0xF191: "SIM-HW-1.0"})
+IDENTITY = EcuIdentity({0xF187: "SIM-PART-0001", 0xF191: "SIM-HW-1.0", 0xF18C: "SIM-SERIAL-42"})
 DATA = bytes((i * 5 + 1) & 0xFF for i in range(TARGET.image_size))
 
 

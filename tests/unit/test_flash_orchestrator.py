@@ -17,6 +17,7 @@ from iran_obd_tuner.core.bench import (
     BENCH_CONFIRMATION_PHRASE,
     SIMULATED_BENCH_TARGET,
     BenchAttestation,
+    EcuIdentity,
     FlashProgress,
     FlashStage,
     JournalState,
@@ -545,3 +546,80 @@ def test_a_stale_journal_blocks_until_it_is_discarded(bench: Bench) -> None:
     JournalInspector.discard_stale(bench.orchestrator.journal_dir)
 
     assert bench.flash(bench.ecu()).state is S.COMPLETED
+
+
+# --------------------------------------------------------------------------- 7e.1 unit binding
+
+
+class _ReadBackLies(VirtualProgrammableEcu):
+    """Corrupts the stage-4 read-back once: the image is written and checked, then reported
+    wrong, so the ECU ends up running the *new* application (other software DIDs)."""
+
+    uploads = 0
+
+    def handle(self, request: bytes) -> list[bytes]:
+        if request[:1] == b"\x35":
+            self.uploads += 1
+            if self.uploads == 3:  # backup read 1, backup read 2, then the read-back
+                self.faults.corrupt_readback_at_block = 10
+        return super().handle(request)
+
+
+def test_recovery_after_a_verify_stage_fault_restores_the_backup_on_the_same_unit(
+    bench: Bench,
+) -> None:
+    """Milestone 7e.1: the ECU runs the new image (F189 changed) but is the same unit."""
+    ecu = _ReadBackLies(clock=bench.clock)
+    outcome = bench.flash(ecu)
+    assert outcome.state is S.INTERRUPTED and "read-back" in (outcome.error or "")
+    assert ecu.flash == bench.plan.image and ecu.application_valid
+    ecu.power_cycle()
+    assert not ecu.in_bootloader  # it boots the new application
+
+    recovered = bench.recover(ecu)
+
+    assert recovered.state is S.RECOVERED, recovered.error
+    assert recovered.states == (S.INTERRUPTED, S.RECOVERING, S.RECOVERED)
+    assert ecu.flash == FACTORY and ecu.application_valid
+
+
+def test_recovery_refuses_another_unit_of_the_same_family(bench: Bench) -> None:
+    interrupted_by_power_loss(bench)
+
+    class Sibling(VirtualProgrammableEcu):
+        """Same part and hardware number, another serial, running its application."""
+
+        def _did_values(self) -> dict[int, bytes]:
+            values = super()._did_values()
+            values[0xF18C] = b"SIM-SERIAL-99"
+            return values
+
+    sibling = Sibling(clock=bench.clock)
+    assert not sibling.in_bootloader
+    with pytest.raises(FlashBlockedError, match="neither the target's bootloader"):
+        bench.recover(sibling)
+    assert not requests_after(sibling, 0, b"\x10\x02")  # nothing that changes it was sent
+    assert sibling.flash == FACTORY
+
+
+def test_an_application_identity_is_never_taken_for_the_bootloader(bench: Bench) -> None:
+    """Milestone 7e.1: the bootloader patterns (F191 only) also match an application."""
+    application = EcuIdentity({0xF187: "SIM-PART-0001", 0xF191: "SIM-HW-1.0"})
+    bootloader = EcuIdentity({0xF191: "SIM-HW-1.0", 0xFD00: "BOOTLOADER"})
+    assert not application.mismatches(TARGET.bootloader_identity_patterns)  # the old trap
+    assert TARGET.shows_application(application) and not TARGET.shows_bootloader(application)
+    assert TARGET.shows_bootloader(bootloader) and not TARGET.shows_application(bootloader)
+
+
+def test_a_flash_is_refused_when_the_unit_cannot_be_identified(bench: Bench) -> None:
+    class NoSerial(VirtualProgrammableEcu):
+        def _did_values(self) -> dict[int, bytes]:
+            values = super()._did_values()
+            values.pop(0xF18C, None)
+            return values
+
+    ecu = NoSerial(clock=bench.clock)
+    with pytest.raises(FlashBlockedError, match="unit identity DID"):
+        bench.flash(ecu)
+    assert not requests_after(ecu, 0, b"\x10\x02")
+    assert bench.orchestrator.assess().status is AssessmentStatus.CLEAN  # never journaled

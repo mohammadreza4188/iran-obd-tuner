@@ -20,6 +20,7 @@ from iran_obd_tuner.core.bench import (
     SIMULATED_BENCH_TARGET,
     BackupReceipt,
     BenchAttestation,
+    EcuIdentity,
     FlashAuthorization,
     bench_flash_policy,
 )
@@ -42,7 +43,7 @@ from iran_obd_tuner.hardware.uds_sim_programmable import (
 
 REGION = SIMULATED_BENCH_TARGET.regions[0]
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
-DIDS = (0xF187, 0xF189, 0xF191, 0xFD00)
+DIDS = (0xF187, 0xF189, 0xF18C, 0xF191, 0xFD00)
 
 
 # --------------------------------------------------------------------------- configuration
@@ -101,14 +102,15 @@ def _authorization(image: bytes) -> FlashAuthorization:
     )
 
 
-def _receipt(backup: bytes, fingerprint: str) -> BackupReceipt:
+def _receipt(backup: bytes, identity: EcuIdentity) -> BackupReceipt:
     return BackupReceipt(
         path="SIMULATED-backup.bin",
         sha256=hashlib.sha256(backup).hexdigest(),
         size=len(backup),
         regions=SIMULATED_BENCH_TARGET.regions,
         target_id=SIMULATED_BENCH_TARGET.target_id,
-        identity_fingerprint=fingerprint,
+        identity_fingerprint=identity.fingerprint(),
+        unit_fingerprint=SIMULATED_BENCH_TARGET.unit_fingerprint(identity) or "e" * 64,
         simulated=True,
         created_at=NOW,
         _token=bench._MINT,
@@ -146,7 +148,7 @@ def test_a_full_flash_over_the_bench_link(channel: str) -> None:
         programmer.enter_programming_session(authorization=auth)
         programmer.unlock(authorization=auth, provider=SimulatedXorSeedKey())
         backup = programmer.upload_region(REGION, authorization=auth)
-        receipt = _receipt(backup, identity.fingerprint())
+        receipt = _receipt(backup, identity)
         programmer.erase_region(REGION, authorization=auth, backup=receipt)
         programmer.download_region(REGION, image, authorization=auth, backup=receipt)
         assert programmer.check_memory(REGION, zlib.crc32(image), authorization=auth)
@@ -173,7 +175,7 @@ def test_power_loss_then_recovery_from_the_backup_on_a_new_link(channel: str) ->
         programmer.enter_programming_session(authorization=auth)
         programmer.unlock(authorization=auth, provider=SimulatedXorSeedKey())
         backup = programmer.upload_region(REGION, authorization=auth)
-        receipt = _receipt(backup, identity.fingerprint())
+        receipt = _receipt(backup, identity)
         programmer.erase_region(REGION, authorization=auth, backup=receipt)
         with pytest.raises(BenchTransferError):
             programmer.download_region(REGION, image, authorization=auth, backup=receipt)

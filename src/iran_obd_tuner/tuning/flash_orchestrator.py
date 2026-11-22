@@ -27,8 +27,10 @@ half-written ECU. A ``KeyboardInterrupt`` is journaled the same way and re-raise
 Recovery (:meth:`BenchFlashOrchestrator.recover`) needs a dirty journal with a backup and an
 authorisation bound to **that backup's** SHA-256. It never takes a backup (that would read a
 half-written ECU over the good copy): it re-verifies the recorded backup, accepts the
-target's bootloader identity (or the backed-up application identity), and runs stages 3-4
-with the backup image -> ``recovered``, or ``recovery_failed`` (which may be retried).
+target's bootloader identity or an application identity of **the same unit** (unit identity
+DIDs, Milestone 7e.1 - after a fault in ``verifying`` the ECU may already run the new image,
+whose software DIDs differ), and runs stages 3-4 with the backup image -> ``recovered``, or
+``recovery_failed`` (which may be retried).
 """
 
 from __future__ import annotations
@@ -128,11 +130,13 @@ class FlashOutcome:
 
 
 def identity_dids(target: BenchTargetProfile) -> tuple[int, ...]:
-    """The DIDs read for identification: the target's patterns plus the software version."""
+    """The DIDs read for identification: the target's patterns, its unit identity DIDs and
+    the software version."""
     return tuple(
         sorted(
             set(target.identity_patterns)
             | set(target.bootloader_identity_patterns)
+            | set(target.unit_identity_dids)
             | {_SOFTWARE_VERSION_DID}
         )
     )
@@ -312,6 +316,12 @@ class BenchFlashOrchestrator:
                     "the ECU does not show the target's application identity (if it sits in "
                     "its bootloader, recover it instead): " + "; ".join(problems)
                 )
+            if target.unit_fingerprint(identity) is None:
+                raise FlashBlockedError(
+                    "the ECU did not report every unit identity DID ("
+                    + ", ".join(f"{did:04X}" for did in target.unit_identity_dids)
+                    + "): a backup could not be bound to it"
+                )
             journal = FlashJournal.begin(
                 self._journal_dir,
                 transaction_id=uuid.uuid4().hex,
@@ -455,12 +465,12 @@ class BenchFlashOrchestrator:
             self._emit(progress, FlashProgress(FlashStage.PRE_FLIGHT, message="link check"))
             self._verify_link(port)
             identity = port.read_identity(identity_dids(target))
-            in_bootloader = not identity.mismatches(target.bootloader_identity_patterns)
-            same_application = (
-                not identity.mismatches(target.identity_patterns)
-                and identity.fingerprint() == receipt.identity_fingerprint
+            in_bootloader = target.shows_bootloader(identity)
+            same_unit = (
+                target.shows_application(identity)
+                and target.unit_fingerprint(identity) == receipt.unit_fingerprint
             )
-            if not (in_bootloader or same_application):
+            if not (in_bootloader or same_unit):
                 raise FlashBlockedError(
                     "the connected ECU is neither the target's bootloader nor the ECU the "
                     "backup was taken from; refusing to write someone else's backup to it"

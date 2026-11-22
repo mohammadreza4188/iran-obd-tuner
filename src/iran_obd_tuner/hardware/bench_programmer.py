@@ -351,9 +351,9 @@ class BenchProgrammer:
             raise SafetyGuardError("read the ECU identity on this link before changing memory")
         if self._identity_kind == "application":
             assert self._identity is not None
-            backup.check_for(
+            backup.check_for(  # the same unit, whatever software it runs (ADR 75)
                 target_id=self._target.target_id,
-                identity_fingerprint=self._identity.fingerprint(),
+                unit_fingerprint=self._target.unit_fingerprint(self._identity),
                 simulated=self.simulated,
             )
 
@@ -447,9 +447,9 @@ class BenchProgrammer:
             printable = raw and all(0x20 <= b < 0x7F for b in raw)
             values[did] = raw.decode("ascii") if printable else raw.hex().upper()
         identity = EcuIdentity(values)
-        if not identity.mismatches(self._target.identity_patterns):
+        if self._target.shows_application(identity):
             self._identity, self._identity_kind = identity, "application"
-        elif not identity.mismatches(self._target.bootloader_identity_patterns):
+        elif self._target.shows_bootloader(identity):
             # The same ECU switched to its bootloader (e.g. the programming session): an
             # application identity already read on this link is the stronger binding and
             # is kept; only a reset clears it. A bootloader-only binding is for recovery.

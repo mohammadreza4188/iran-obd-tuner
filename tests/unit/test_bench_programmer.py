@@ -58,7 +58,7 @@ REGION = TARGET.regions[0]
 SIZE = TARGET.image_size
 BLOCK = 256
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
-IDENTITY_DIDS = (0xF187, 0xF189, 0xF191, DID_BOOT_STATUS)
+IDENTITY_DIDS = (0xF187, 0xF189, 0xF18C, 0xF191, DID_BOOT_STATUS)
 
 
 def new_image(seed: int = 3) -> bytes:
@@ -98,6 +98,7 @@ def receipt(identity: EcuIdentity, **overrides: object) -> BackupReceipt:
         "regions": TARGET.regions,
         "target_id": TARGET.target_id,
         "identity_fingerprint": identity.fingerprint(),
+        "unit_fingerprint": TARGET.unit_fingerprint(identity) or "e" * 64,
         "simulated": True,
         "created_at": NOW,
         "_token": bench._MINT,
@@ -266,7 +267,7 @@ def test_nothing_is_sent_without_an_authorisation(rig, call) -> None:
     ("backup_overrides", "message"),
     [
         ({"target_id": "simulated.other"}, "another target"),
-        ({"identity_fingerprint": "f" * 64}, "different ECU"),
+        ({"unit_fingerprint": "f" * 64}, "different ECU"),
         (
             {"regions": (MemoryRegion(0x8_0000, 16 * 1024),), "size": 16 * 1024},
             "not covered",
@@ -299,7 +300,10 @@ def test_a_bootloader_read_never_weakens_the_application_binding(rig) -> None:
     programmer, _ecu, bus, _log, auth, _backup = prepared(rig, image)
     again = programmer.read_identity(IDENTITY_DIDS)
     assert again.dids[DID_BOOT_STATUS] == "BOOTLOADER"
-    foreign = receipt(EcuIdentity({0xF187: "SIM-PART-9999", 0xF191: "SIM-HW-1.0"}))
+    # another unit of the same family: same hardware number, another serial
+    foreign = receipt(
+        EcuIdentity({0xF187: "SIM-PART-0001", 0xF191: "SIM-HW-1.0", 0xF18C: "SIM-SERIAL-99"})
+    )
     before = len(bus.sent)
 
     with pytest.raises(SafetyGuardError, match="different ECU"):

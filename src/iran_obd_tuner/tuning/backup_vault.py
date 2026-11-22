@@ -41,7 +41,8 @@ from iran_obd_tuner.core.models import utc_now
 __all__ = ["MANIFEST_KIND", "BackupError", "BackupVault", "receipt_record"]
 
 MANIFEST_KIND = "bench_flash_backup"
-_MANIFEST_SCHEMA = 1
+#: 2 since Milestone 7e.1 (``unit_fingerprint``); older backups no longer verify (fail closed).
+_MANIFEST_SCHEMA = 2
 
 
 class BackupError(SafetyGuardError):
@@ -81,6 +82,7 @@ def receipt_record(receipt: BackupReceipt) -> dict[str, Any]:
         "regions": _regions_record(receipt.regions),
         "target_id": receipt.target_id,
         "identity_fingerprint": receipt.identity_fingerprint,
+        "unit_fingerprint": receipt.unit_fingerprint,
         "simulated": receipt.simulated,
         "created_at": receipt.created_at.isoformat(),
     }
@@ -127,6 +129,13 @@ class BackupVault:
         expected = sum(region.size for region in regions)
         if len(first) != expected:
             raise BackupError(f"backup has {len(first)} bytes, the regions {expected}")
+        unit = target.unit_fingerprint(identity)
+        if unit is None:
+            raise BackupError(
+                "the ECU identity lacks a unit identity DID "
+                f"({', '.join(f'{d:04X}' for d in target.unit_identity_dids)}): the backup could "
+                "not be bound to this ECU (nothing was written)"
+            )
         sha = _sha256(first)
         created = self._now()
         stamp = created.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -144,6 +153,8 @@ class BackupVault:
             "regions": _regions_record(regions),
             "identity": {f"{did:04X}": value for did, value in sorted(identity.dids.items())},
             "identity_fingerprint": identity.fingerprint(),
+            "unit_fingerprint": unit,
+            "unit_identity_dids": [f"{did:04X}" for did in target.unit_identity_dids],
             "created_at": created.isoformat(),
             "note": "SIMULATED backup of the virtual programmable ECU" if simulated else "",
         }
@@ -159,6 +170,7 @@ class BackupVault:
             regions=tuple(regions),
             target_id=target.target_id,
             identity_fingerprint=identity.fingerprint(),
+            unit_fingerprint=unit,
             simulated=simulated,
             created_at=created,
             _token=_MINT,
@@ -190,10 +202,12 @@ class BackupVault:
             raise BackupError(f"backup {path} changed on disk: refusing to rely on it")
         expected = {
             "kind": MANIFEST_KIND,
+            "schema_version": _MANIFEST_SCHEMA,
             "sha256": record["sha256"],
             "size": record["size"],
             "target_id": record["target_id"],
             "identity_fingerprint": record["identity_fingerprint"],
+            "unit_fingerprint": record["unit_fingerprint"],
             "simulated": record["simulated"],
             "regions": record["regions"],
         }
@@ -218,6 +232,7 @@ class BackupVault:
                 "regions": _regions_record(regions),
                 "target_id": str(record["target_id"]),
                 "identity_fingerprint": str(record["identity_fingerprint"]),
+                "unit_fingerprint": str(record["unit_fingerprint"]),
                 "simulated": bool(record["simulated"]),
             }
         except (KeyError, TypeError, ValueError) as exc:
@@ -230,6 +245,7 @@ class BackupVault:
             regions=regions,
             target_id=normalized["target_id"],
             identity_fingerprint=normalized["identity_fingerprint"],
+            unit_fingerprint=normalized["unit_fingerprint"],
             simulated=normalized["simulated"],
             created_at=created,
             _token=_MINT,

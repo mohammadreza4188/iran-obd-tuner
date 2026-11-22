@@ -194,13 +194,12 @@ def test_a_bad_key_stops_before_the_backup_and_leaves_the_ecu_untouched(
     assert SimulatedEcuStore(tmp_path).load().failed_key_attempts == 1  # type: ignore[union-attr]
 
 
-def test_a_corrupt_read_back_is_interrupted_and_its_recovery_fails_closed(
+def test_a_corrupt_read_back_is_interrupted_and_recovered_on_the_same_unit(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Known gap (reported to the owner): after a fault in ``verifying`` the simulated ECU
-    runs the new, checked image; its software DID changed, so the programmer's identity
-    binding (ADR 63) refuses to write the backup to it. The refusal comes before any erase.
-    """
+    """After a fault in ``verifying`` the simulated ECU runs the new, checked image (its
+    software DID changed). Milestone 7e.1 binds the backup to the unit (hardware number and
+    serial), so the recovery restores the backup instead of failing for ever."""
     code, doc = run_json(
         capsys, "bench", "flash-sim", "--output", str(tmp_path), "--fault", "corrupt-readback"
     )
@@ -211,10 +210,9 @@ def test_a_corrupt_read_back_is_interrupted_and_its_recovery_fails_closed(
 
     code, doc = run_json(capsys, "bench", "flash-sim", "--output", str(tmp_path), "--recover")
 
-    assert code == 3 and doc["result"]["state"] == "recovery_failed"
-    assert "identity mismatch" in doc["result"]["error"]
-    assert doc["journal"]["status"] == "dirty"
-    assert ecu_flash(tmp_path) == after_flash  # refused before anything was erased
+    assert code == 0 and doc["result"]["state"] == "recovered", doc["result"]["error"]
+    assert doc["journal"]["status"] == "clean"
+    assert ecu_flash(tmp_path) == default_simulated_image()  # the backup is back
 
 
 # --------------------------------------------------------------------------- stale journal
