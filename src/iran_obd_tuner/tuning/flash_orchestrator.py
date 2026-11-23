@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from iran_obd_tuner.core.bench import (
+    ERASE_PROGRESS_MESSAGE,
     BackupReceipt,
     BenchProgrammerPort,
     BenchTargetProfile,
@@ -245,6 +246,8 @@ class BenchFlashOrchestrator:
         self._vault.verify(receipt)  # check-to-use: the backup is still intact on disk
         if run.journal.state is not JournalState.RECOVERING:
             run.transition(JournalState.ERASING)
+        # the point of no return, journaled above: the UI locks "cancel" from here (7f)
+        self._emit(progress, FlashProgress(stage, message=ERASE_PROGRESS_MESSAGE))
         for region in regions:
             port.erase_region(region, authorization=authorization, backup=receipt)
         if run.journal.state is not JournalState.RECOVERING:

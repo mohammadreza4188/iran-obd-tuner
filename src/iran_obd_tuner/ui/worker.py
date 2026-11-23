@@ -12,6 +12,12 @@ seconds), so the dashboard never calls a :class:`LiveDataSession` on the GUI thr
   (typically a disconnect) on the calling thread, so no serial port is left open.
 
 Errors are passed to the error callback as exception objects; the runner never hides them.
+
+:class:`ProgressRelay` (Milestone 7f) carries progress reports from a running job to the GUI
+thread: the job calls :meth:`ProgressRelay.report` on the worker thread, and the relay - a
+``QObject`` living on the GUI thread - re-emits it through a queued signal, so widgets are
+only ever touched on the GUI thread. :class:`CancelFlag` is the matching thread-safe "please
+stop" request polled by the job.
 """
 
 from __future__ import annotations
@@ -26,13 +32,39 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from iran_obd_tuner.core.logging import get_logger
 
-__all__ = ["BackgroundRunner"]
+__all__ = ["BackgroundRunner", "CancelFlag", "ProgressRelay"]
 
 _LOG = get_logger("ui.worker")
 
 Job = Callable[[], Any]
 OnDone = Callable[[Any], None]
 OnError = Callable[[BaseException], None]
+
+
+class ProgressRelay(QObject):
+    """Deliver ``report(x)`` calls made on any thread as ``progressed(x)`` on the GUI thread."""
+
+    progressed = Signal(object)
+
+    def report(self, value: object) -> None:
+        """Callable from the worker thread (Qt queues the signal to this object's thread)."""
+        self.progressed.emit(value)
+
+
+class CancelFlag:
+    """A thread-safe, one-way "cancel requested" flag (reset for every new job)."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def request(self) -> None:
+        self._event.set()
+
+    def reset(self) -> None:
+        self._event.clear()
+
+    def __call__(self) -> bool:
+        return self._event.is_set()
 
 
 class _Worker(QObject):
@@ -66,14 +98,14 @@ class BackgroundRunner(QObject):
 
     _wake = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, *, name: str = "adapter-io") -> None:
         super().__init__(parent)
         self._queue: deque[tuple[int, Job]] = deque()
         self._lock = threading.Lock()
         self._ids = count(1)
         self._callbacks: dict[int, tuple[OnDone, OnError]] = {}
         self._thread = QThread()
-        self._thread.setObjectName("iran-obd-tuner-adapter-io")
+        self._thread.setObjectName(f"iran-obd-tuner-{name}")
         self._worker = _Worker(self._queue, self._lock)
         self._worker.moveToThread(self._thread)
         self._wake.connect(self._worker.drain)

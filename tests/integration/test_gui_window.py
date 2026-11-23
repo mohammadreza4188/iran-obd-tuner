@@ -966,13 +966,16 @@ def _checksum_states(view) -> list[str]:
     return [table.item(r, 4).data(Qt.ItemDataRole.UserRole) for r in range(table.rowCount())]
 
 
-def test_bench_starts_empty_with_phase5_locked(window: MainWindow) -> None:
+def test_bench_starts_empty_with_the_simulated_flash_panel(window: MainWindow) -> None:
     view = _bench(window)
     assert view.banner.text() == COPY["en"]["bench_warning"]
     assert "Nothing is read from or written to any ECU" in view.banner.text()
     assert view.info_label.text() == COPY["en"]["bench_no_rom"]
-    for btn in (view.read_ecu_btn, view.write_ecu_btn, view.unlock_ecu_btn):
-        assert not btn.isEnabled()
+    # Milestone 7f: the locked Phase 5 row became the simulated bench flash panel
+    assert not hasattr(view, "read_ecu_btn") and not hasattr(view, "write_ecu_btn")
+    assert view.flash_panel is window.bench_flash_panel
+    assert view.flash_panel.sim_badge.text() == COPY["en"]["bflash_sim_badge"]
+    assert not view.flash_panel.flash_btn.isEnabled()  # bench flash mode is off
     for btn in (view.undo_btn, view.redo_btn, view.export_btn, view.defs_btn, view.recalc_btn):
         assert not btn.isEnabled()
     assert view.open_btn.isEnabled() and view.demo_btn.isEnabled()

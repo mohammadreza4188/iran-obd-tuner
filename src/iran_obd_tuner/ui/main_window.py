@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
 )
 
 from iran_obd_tuner import __version__
+from iran_obd_tuner.core.bench_reports import BenchJournalReport, BenchJournalStatus
 from iran_obd_tuner.core.exceptions import (
     EvidenceExportError,
     IranObdTunerError,
@@ -75,6 +76,7 @@ from iran_obd_tuner.diagnostics.models import (
 from iran_obd_tuner.diagnostics.recorder import CsvRecorder
 from iran_obd_tuner.diagnostics.vehicle_matcher import ObservedFacts, rank_candidates
 from iran_obd_tuner.ui.backend import DashboardBackend
+from iran_obd_tuner.ui.bench_flash_panel import EMERGENCY_STATUSES, BenchFlashPanel, ltr
 from iran_obd_tuner.ui.bench_view import BenchView
 from iran_obd_tuner.ui.diagnostics_view import DiagnosticsView
 from iran_obd_tuner.ui.gauges import GaugeCard
@@ -155,6 +157,10 @@ _MIL_STYLE_BASE = "font-weight: bold; font-size: 11px; border-radius: 4px; paddi
 _MIL_STYLE_ON = _MIL_STYLE_BASE + "color: #ffffff; background-color: #dc2626;"
 _MIL_STYLE_OFF = _MIL_STYLE_BASE + "color: #10b981; border: 1px solid #10b981;"
 _MIL_STYLE_UNKNOWN = _MIL_STYLE_BASE + "color: #94a3b8; border: 1px solid #334155;"
+_RECOVERY_BANNER = (
+    "QFrame#recoveryBanner { background-color: #7f1d1d; border: 2px solid #ef4444; "
+    "border-radius: 8px; } QFrame#recoveryBanner QLabel { color: #fee2e2; font-weight: bold; }"
+)
 _RECORD_STYLE_ACTIVE = (
     "background-color: #ef4444; color: #ffffff; border: none; border-radius: 8px; "
     "padding: 8px 16px; font-weight: bold;"
@@ -254,6 +260,9 @@ class MainWindow(QMainWindow):
         self._safety_modal: SafetyModal | None = None
         # Adapter I/O runs on one background thread; results come back as callbacks.
         self._runner = BackgroundRunner(self)
+        # Simulated bench flashing runs on its own thread, so live polling never waits for it.
+        self._bench_runner = BackgroundRunner(self, name="bench-flash")
+        self._bench_journal: BenchJournalReport | None = None
         self._connecting = False
         self._poll_pending = False
         self._generation = 0  # bumped on disconnect; stale results are dropped
@@ -271,6 +280,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_language()
         self._apply_theme()
+        self.bench_flash_panel.refresh_journal()  # start-up check: dirty journal -> banner
 
     # ------------------------------------------------------------------ state
     @property
@@ -286,7 +296,7 @@ class MainWindow(QMainWindow):
     @property
     def busy(self) -> bool:
         """Whether adapter jobs are still running or queued (used by tests)."""
-        return self._runner.pending > 0
+        return self._runner.pending > 0 or self._bench_runner.pending > 0
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -330,6 +340,22 @@ class MainWindow(QMainWindow):
         header.addLayout(badge_box)
         outer.addLayout(header)
         outer.addSpacing(8)
+
+        # --- Emergency recovery banner (Milestone 7f): a dirty or corrupt bench journal ---
+        self.recovery_banner = QFrame()
+        self.recovery_banner.setObjectName("recoveryBanner")
+        self.recovery_banner.setStyleSheet(_RECOVERY_BANNER)
+        banner_row = QHBoxLayout(self.recovery_banner)
+        self.recovery_label = QLabel()
+        self.recovery_label.setWordWrap(True)
+        self.recovery_btn = QPushButton()
+        self.recovery_btn.clicked.connect(self._start_bench_recovery)
+        self.inspect_journal_btn = QPushButton()
+        banner_row.addWidget(self.recovery_label, 1)
+        banner_row.addWidget(self.recovery_btn)
+        banner_row.addWidget(self.inspect_journal_btn)
+        self.recovery_banner.hide()
+        outer.addWidget(self.recovery_banner)
 
         # --- Navbar tabs ---
         tab_row = QHBoxLayout()
@@ -512,8 +538,19 @@ class MainWindow(QMainWindow):
         kb_scroll.setWidget(self.kb_view)
         self.stack.addWidget(kb_scroll)
 
-        # Bench: offline ROM file analysis (Phase 4); ECU access (Phase 5) stays locked
-        self.bench_view = BenchView(self._backend.create_bench_workspace(), self._runner.submit)
+        # Bench: offline ROM file analysis (Phase 4) and the simulated bench flash (7f)
+        self.bench_flash_panel = BenchFlashPanel(
+            self._backend.bench_flash_service,
+            self._backend.bench_flash_dir,
+            self._bench_runner.submit,
+        )
+        self.bench_flash_panel.journal_changed.connect(self._on_bench_journal)
+        self.inspect_journal_btn.clicked.connect(self.bench_flash_panel.inspect_journal)
+        self.bench_view = BenchView(
+            self._backend.create_bench_workspace(),
+            self._runner.submit,
+            flash_panel=self.bench_flash_panel,
+        )
         self.bench_title = self.bench_view.title_label
         bench_scroll = QScrollArea()
         bench_scroll.setWidgetResizable(True)
@@ -613,6 +650,7 @@ class MainWindow(QMainWindow):
         self.uds_view.set_language(self.lang)
         self.kb_view.set_language(self.lang)
         self.bench_view.set_language(self.lang)
+        self._render_recovery_banner()
         self.lang_label.setText(t["settings_lang"])
         self.mode_label.setText(t["settings_mode"])
         self.mode_combo.setItemText(0, t["mode_sim"])
@@ -1205,6 +1243,38 @@ class MainWindow(QMainWindow):
         self.recording_label.setText(text)
 
     # ------------------------------------------------------------ log
+    # ------------------------------------------------------------------ bench recovery
+    def _on_bench_journal(self, report: object) -> None:
+        assert isinstance(report, BenchJournalReport)
+        previous = self._bench_journal
+        self._bench_journal = report
+        if report.status in EMERGENCY_STATUSES and (
+            previous is None or previous.status is not report.status
+        ):
+            self._append_log("msg.bench_journal_dirty", report.status.value)
+        self._render_recovery_banner()
+
+    def _render_recovery_banner(self) -> None:
+        t = COPY[self.lang]
+        report = self._bench_journal
+        self.recovery_btn.setText(t["bflash_banner_recover"])
+        self.inspect_journal_btn.setText(t["bflash_banner_inspect"])
+        if report is None or report.status not in EMERGENCY_STATUSES:
+            self.recovery_banner.hide()
+            return
+        if report.status is BenchJournalStatus.CORRUPT:
+            text = t["bflash_banner_corrupt"].format(ltr(report.journal_path))
+        else:
+            state = t["bflash_states"].get(report.state.value if report.state else "", "")
+            text = t["bflash_banner_dirty"].format(state, ltr(report.directory))
+        self.recovery_label.setText(text)
+        self.recovery_btn.setEnabled(report.can_recover)
+        self.recovery_banner.show()
+
+    def _start_bench_recovery(self) -> None:
+        self._switch_tab("bench")
+        self.bench_flash_panel.start_recovery()
+
     def _append_log(self, key: str, *args: object) -> None:
         text = format_message(self.lang, key, *args)
         stamp = datetime.now().strftime("%H:%M:%S")
@@ -1215,4 +1285,5 @@ class MainWindow(QMainWindow):
         self._disconnect()
         # Stops the worker thread and runs the queued disconnect, so no port stays open.
         self._runner.shutdown()
+        self._bench_runner.shutdown()  # a running simulated flash is completed first
         super().closeEvent(event)

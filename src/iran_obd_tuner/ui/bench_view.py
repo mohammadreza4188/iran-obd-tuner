@@ -1,4 +1,5 @@
-"""Bench tab: offline ROM file analysis and table editing (Phase 4; nothing talks to an ECU).
+"""Bench tab: offline ROM file analysis and table editing (Phase 4), plus the simulated bench
+flash panel (Milestone 7f, virtual ECU only).
 
 Pure presentation over a :class:`~iran_obd_tuner.ui.backend.BenchWorkspace` (implemented in
 the application layer; ``ui`` never imports ``tuning``). File work (open, definitions, export)
@@ -7,8 +8,10 @@ runs through the window's background runner; table edits are fast in-memory oper
 Honesty rules visible here: a permanent banner says that nothing is sent to any ECU; the
 SIMULATED demo is labelled; checksum "valid" carries its caveat; values outside a map's bounds
 are refused (never clamped); exporting needs an explicit acknowledgement and is refused for
-the source file or while a configured checksum is invalid. The Phase 5 ECU buttons stay
-disabled.
+the source file or while a configured checksum is invalid. The workbench itself never talks
+to an ECU; the old locked Phase 5 buttons were replaced in Milestone 7f by
+:class:`~iran_obd_tuner.ui.bench_flash_panel.BenchFlashPanel`, which only reaches the
+virtual programmable ECU.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from iran_obd_tuner.core.calibration import (
 )
 from iran_obd_tuner.core.exceptions import IranObdTunerError
 from iran_obd_tuner.ui.backend import BenchWorkspace
+from iran_obd_tuner.ui.bench_flash_panel import BenchFlashPanel
 from iran_obd_tuner.ui.i18n import COPY, Lang
 
 __all__ = ["CHECKSUM_COLORS", "BenchView", "heat_color", "parse_number"]
@@ -122,8 +126,16 @@ class BenchView(QWidget):
         submit: Runs ``job`` on the background thread and calls back on the GUI thread.
     """
 
-    def __init__(self, workspace: BenchWorkspace, submit: Submit, parent: QWidget | None = None):
+    def __init__(
+        self,
+        workspace: BenchWorkspace,
+        submit: Submit,
+        parent: QWidget | None = None,
+        *,
+        flash_panel: BenchFlashPanel | None = None,
+    ):
         super().__init__(parent)
+        self.flash_panel = flash_panel
         self._ws = workspace
         self._submit = submit
         self._lang: Lang = "fa"
@@ -257,18 +269,8 @@ class BenchView(QWidget):
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter, 1)
 
-        locked = QHBoxLayout()
-        self.phase5_label = QLabel()
-        self.phase5_label.setStyleSheet("color: #94a3b8;")
-        locked.addWidget(self.phase5_label)
-        self.read_ecu_btn = QPushButton()
-        self.write_ecu_btn = QPushButton()
-        self.unlock_ecu_btn = QPushButton()
-        for btn in (self.read_ecu_btn, self.write_ecu_btn, self.unlock_ecu_btn):
-            btn.setEnabled(False)  # Phase 5: permanently locked in this build
-            locked.addWidget(btn)
-        locked.addStretch()
-        layout.addLayout(locked)
+        if flash_panel is not None:  # Milestone 7f: simulated bench flash (virtual ECU only)
+            layout.addWidget(flash_panel)
         self.refresh()
 
     # ------------------------------------------------------------------ helpers
@@ -492,10 +494,8 @@ class BenchView(QWidget):
         self.checksum_table.setHorizontalHeaderLabels(
             [ccols["id"], ccols["algorithm"], ccols["range"], ccols["values"], ccols["status"]]
         )
-        self.phase5_label.setText(t["bench_phase5"])
-        self.read_ecu_btn.setText(t["bench_btn_read"])
-        self.write_ecu_btn.setText(t["bench_btn_write"])
-        self.unlock_ecu_btn.setText(t["bench_btn_unlock"])
+        if self.flash_panel is not None:
+            self.flash_panel.set_language(lang)
         self.refresh()
 
     def refresh(self) -> None:

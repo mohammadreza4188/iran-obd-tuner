@@ -121,6 +121,7 @@ core/          تنظیمات، لاگ، مدل‌ها، کاتالوگ PID/DTC�
 | `tuning/flash_orchestrator.py` | (Milestone 7d) `BenchFlashOrchestrator`: چهار مرحله و بازیابی، فقط روی `BenchProgrammerPort` | پیاده‌شده (فقط شبیه‌ساز) |
 | `core/bench_reports.py` | (Milestone 7e) گزارش‌های ساده و بدون Qt جلسه Bench برای CLI و UI: `BenchJournalReport` (`clean`/`stale`/`dirty`/`corrupt`)، `BenchFlashReport`، `SimulatedFault` | پیاده‌شده |
 | `tuning/demo.py`, `tuning/data/demo_maps.json` | ROM نمایشی شبیه‌سازی‌شده و تعریف نقشه‌هایش | پیاده‌شده (شبیه‌سازی) |
+| `ui/bench_flash_panel.py` | (Milestone 7f) `BenchFlashPanel`، `BenchAttestationDialog`، `JournalDialog`: فلش و بازیابی شبیه‌سازی‌شده در تب Bench، فقط روی Protocol `BenchFlashService` | پیاده‌شده (فقط شبیه‌ساز) |
 | `app/bench.py`, `ui/bench_view.py` | `AppBenchWorkspace` (پیاده‌سازی Protocol `BenchWorkspace`) و تب «میز کار ROM» | پیاده‌شده |
 | `app/bench_flash.py` | (Milestone 7e) `BenchFlashService`: **تنها نقطه اتصال** هماهنگ‌کننده `tuning` به `hardware/bench_link.py`؛ `assess_journal`، `run_simulated_flash`، `run_simulated_recovery`، `discard_stale_journal`؛ ذخیره حالت پایدار ECU شبیه‌سازی‌شده بین اجراها | پیاده‌شده (فقط شبیه‌ساز) |
 | `app/cli.py`, `app/application.py` | CLI و سیم‌کشی | پیاده‌شده |
@@ -368,6 +369,21 @@ DEFAULT_POLICY = SafetyPolicy(allowed={READ_ONLY})
     - faultها: `drop-at-block=N`، `nrc72-at-block=N`، `power-loss-at-block=N` (N از ۱ تا ۶۴؛ بلوک ۱ KiB)،
       `bad-key` و `corrupt-readback`. مورد آخر فقط برای read-back مرحله ۴ مسلح می‌شود؛ اگر از ابتدا
       مسلح شود، دو خواندن پشتیبان را نابرابر می‌کند.
+  - **رابط گرافیکی فلش Bench (Milestone 7f، فقط شبیه‌ساز):** `ui/bench_flash_panel.py` فقط Protocol
+    `BenchFlashService` در `ui/backend.py` را می‌بیند. ورودی و خروجی آن گزارش‌های `core/bench_reports.py`
+    و `BenchAttestation` است و هیچ capability، policy یا نوع `tuning` در `ui` نیست (تست AST).
+    - modal تأیید شامل چهار جمله انسانی، بررسی‌های ماشینی ✓/✗ (`preflight_flash`/`preflight_recovery`،
+      فقط‌خواندنی)، نام اپراتور و `BENCH FLASH` است. attestation فقط در حافظه همان پنجره است: نه QSettings
+      و نه فایل (تست AST). هر `BenchAttestation` ساخته‌شده در `ui` به‌صورت literal `simulated=True` است.
+    - کار Bench روی thread جداگانه (`BackgroundRunner(name="bench-flash")`) اجرا می‌شود تا polling زنده
+      منتظر نماند. پیشرفت با `ProgressRelay` (سیگنال صف‌شده) به thread رابط کاربری می‌رسد و لغو با
+      `CancelFlag` انجام می‌شود.
+    - هماهنگ‌کننده درست پس از ثبت `erasing` یک گزارش `ERASE_PROGRESS_MESSAGE` می‌فرستد. سرویس لغو را فقط
+      در مراحل `pre_flight` و `backup` (`CANCELLABLE_STAGES`) می‌پذیرد و رابط کاربری از همان گزارش دکمه لغو
+      را قفل و هشدار «اتصال را قطع نکنید» را نشان می‌دهد.
+    - `MainWindow` هنگام شروع و پس از هر اجرا ژورنال را بررسی می‌کند. برای `dirty` یا `corrupt` بنر قرمز
+      بازیابی اضطراری نشان داده می‌شود؛ در حالت `corrupt` دکمه بازیابی غیرفعال است. پوشه داشبورد
+      `output_dir/bench-flash-sim` است. شرح کامل در [`bench-flash-protocol.md`](bench-flash-protocol.md).
 - پیش‌نیازهای هر نوشتن آینده در `BenchSafetyChecklist` (پشتیبان‌گیری، تأیید خواندن مجدد
   پشتیبان، پایداری ولتاژ، چک‌سام مستند، تناسب با ECU، اعتبارسنجی خودرویی، تأیید صاحب پروژه)
   آمده است.
@@ -533,6 +549,10 @@ import کتابخانه خارجی داخل همان ماژول، `implemented=T
 | ۷۴ | (Milestone 7e) اسکن import در تست معماری `from pkg import submodule` را به‌صورت `pkg.submodule` ثبت می‌کند و import نسبی در `src` ممنوع است | تست جهش نشان داد `from iran_obd_tuner.hardware import bench_link` فقط `iran_obd_tuner.hardware` ثبت می‌شد و import نسبی اصلاً دیده نمی‌شد؛ پس هر قاعده «فقط X اجازه import از Y دارد» دورزدنی بود | فقط `node.module` |
 | ۷۵ | (Milestone 7e.1، تأیید صاحب پروژه: گزینه A) `BackupReceipt` به `unit_fingerprint` بسته است: SHA-256 روی `BenchTargetProfile.unit_identity_dids` (شماره سخت‌افزار و سریال)، نه روی همه DIDها؛ DIDهای شناسایی نرم‌افزار رد می‌شوند؛ مانیفست نسخه ۲ | اثرانگشت کامل `F189` را دارد و هر فلش آن را عوض می‌کند؛ پس از fault در `verifying` بازیابی برای همیشه رد می‌شد. هدف پیوند (پشتیبان ECU الف روی ECU ب نرود) با سریال برآورده می‌شود؛ اثرانگشت کامل فقط برای ثبت می‌ماند (تست AST) | بازبینی دوباره مرحله ۴ به‌جای بازگرداندن؛ دستور `abandon` |
 | ۷۶ | (Milestone 7e.1) «در bootloader» یعنی الگوی bootloader جور **و** الگوی application ناجور (`shows_bootloader`) | الگوی bootloader (`F191`) با هویت application هم جور است و بررسی قبلی هر ECU آن خانواده را bootloader حساب می‌کرد | فقط الگوی bootloader |
+| ۷۷ | (Milestone 7f) Protocol به نام `BenchFlashService` در `ui/backend.py` با گزارش‌های `core/bench_reports.py` (`BenchPreflightReport`، `BenchCheck`)؛ `app/bench_flash.py` آن را پیاده می‌کند (تست تطابق امضاها) | همان الگوی ADR ۴۰: `ui` به `tuning` و capabilityها دسترسی ندارد و CLI و داشبورد یک facade مشترک دارند | import مستقیم `tuning` یا ساخت مجوز در `ui` |
+| ۷۸ | (Milestone 7f، تصمیم D4) attestation داشبورد فقط در حافظه پنجره و فقط `simulated=True`؛ هر اجرا دوباره از gate می‌گذرد | تأیید انسانی برای یک جلسه است؛ ذخیره آن یعنی حالت فلش از تنظیمات زنده شود (ADR ۵) | QSettings یا فایل تنظیمات |
+| ۷۹ | (Milestone 7f) نقطه بی‌بازگشت به‌صورت گزارش پیشرفت `erase` (`core.bench.ERASE_PROGRESS_MESSAGE`) پس از ثبت `erasing`؛ لغو فقط در `pre_flight`/`backup` | رابط کاربری باید دقیقاً همان لحظه قفل شود؛ حدس زدن از اولین بلوک انتقال یک فاصله کور می‌گذاشت که در آن لغو بی‌اثر بود (تصمیم D3) | لغو در هر مرحله؛ بدون گزارش erase |
+| ۸۰ | (Milestone 7f) thread جداگانه برای کار Bench و رله پیشرفت با سیگنال صف‌شده Qt؛ قطعه‌های چپ‌به‌راست (مسیر، هش، جزئیات فنی) در متن فارسی با LRI/PDI ایزوله می‌شوند | فلش چند ثانیه طول می‌کشد و نباید polling زنده را متوقف کند؛ رندر واقعی نشان داد مسیر ویندوز و «N free, M needed» در متن راست‌به‌چپ جابه‌جا می‌شوند | همان thread آداپتور؛ نمایش خام |
 | ۱۵ | (Milestone 1) `scripts/check.py` ابزار غایب را شکست حساب می‌کند (`--allow-missing` برای حالت نرم) | گیت skip‌شده گیت پاس‌شده نیست؛ از سبز کاذب جلوگیری می‌کند | skip خاموش |
 
 ### بدهی فنی (Known debt)

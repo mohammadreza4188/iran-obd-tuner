@@ -1216,3 +1216,86 @@ def test_nothing_binds_a_backup_to_the_full_identity_fingerprint() -> None:
     for module in (PROGRAMMER_MODULE, ORCHESTRATOR_MODULE):
         tree = ast.parse((PACKAGE_DIR / module).read_text(encoding="utf-8"))
         assert _call_lines(tree, "unit_fingerprint"), module  # they bind to the unit
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 7f: the simulated bench flash UI - session only, simulated only
+# --------------------------------------------------------------------------- #
+
+BENCH_PANEL_MODULE = "ui/bench_flash_panel.py"
+#: Names that would persist the bench flash mode (decision D4: never stored).
+_PERSISTENCE_NAMES = {"QSettings", "shelve", "pickle", "sqlite3"}
+
+
+def test_the_bench_flash_mode_is_never_persisted_by_the_ui() -> None:
+    offenders = []
+    for relative, tree in _package_trees():
+        if not relative.startswith("ui/"):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name | ast.Attribute):
+                name = node.id if isinstance(node, ast.Name) else node.attr
+                if name in _PERSISTENCE_NAMES:
+                    offenders.append(f"{relative}:{node.lineno} {name}")
+    panel = ast.parse((PACKAGE_DIR / BENCH_PANEL_MODULE).read_text(encoding="utf-8"))
+    for node in ast.walk(panel):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            # QDialog.open() takes no argument; a file open (builtin or Path) does
+            file_open = name == "open" and (isinstance(func, ast.Name) or node.args)
+            if name in _FILE_WRITE_CALLS or file_open:
+                offenders.append(f"{BENCH_PANEL_MODULE}:{node.lineno} {name}")
+    assert offenders == []
+    opens = [c for c in ast.walk(panel) if isinstance(c, ast.Call) and _call_name(c) == "open"]
+    assert opens  # the scan sees the dialogs being opened
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+
+
+def test_the_ui_only_ever_builds_simulated_attestations() -> None:
+    calls = []
+    for relative, tree in _package_trees():
+        if not relative.startswith("ui/"):
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "BenchAttestation"
+            ):
+                simulated = next((k.value for k in node.keywords if k.arg == "simulated"), None)
+                calls.append(isinstance(simulated, ast.Constant) and simulated.value is True)
+    assert calls and all(calls), calls
+
+
+def test_the_app_service_implements_the_ui_protocol() -> None:
+    import inspect
+
+    from iran_obd_tuner.app.bench_flash import BenchFlashService as Service
+    from iran_obd_tuner.ui.backend import BenchFlashService as Protocol
+
+    methods = [
+        name
+        for name, value in vars(Protocol).items()
+        if callable(value) and not name.startswith("_")
+    ]
+    assert len(methods) == 6, methods
+    for name in methods:
+        wanted = inspect.signature(getattr(Protocol, name))
+        actual = inspect.signature(getattr(Service, name))
+        assert list(wanted.parameters) == list(actual.parameters), name
+        for param in wanted.parameters.values():
+            assert actual.parameters[param.name].kind == param.kind, (name, param.name)
+        # nothing in the contract could name a real interface, channel or port
+        assert not {"interface", "channel", "port", "bitrate"} & set(wanted.parameters), name
+
+
+def test_the_window_reaches_bench_flashing_only_through_the_backend() -> None:
+    for relative in ("ui/main_window.py", BENCH_PANEL_MODULE):
+        modules = {use.module for use in _imports() if use.file == relative}
+        assert not any(m.startswith(f"{ROOT}.app") for m in modules), relative
+        assert not any(_first_party_layer(m) in {"tuning", "hardware"} for m in modules), relative

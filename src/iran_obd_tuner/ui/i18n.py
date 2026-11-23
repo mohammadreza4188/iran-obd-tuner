@@ -150,13 +150,178 @@ COPY: dict[str, dict[str, Any]] = {
         },
         "bench_title": "میز کار ROM (تحلیل آفلاین فایل)",
         "bench_warning": (
-            "فاز ۴: فقط تحلیل آفلاین فایل. هیچ داده‌ای از ECU خوانده یا روی آن نوشته نمی‌شود. فایل"
-            " خروجی برای هیچ خودرو یا ECU تأیید نشده است و این برنامه امکان فلش کردن آن را ندارد."
+            "میز کار ROM: فقط تحلیل آفلاین فایل؛ از اینجا هیچ داده‌ای از ECU خوانده یا روی آن"
+            " نوشته نمی‌شود و فایل خروجی برای هیچ خودرو یا ECU تأیید نشده است. فلش Bench پایین"
+            " صفحه فقط روی ECU شبیه‌سازی‌شده کار می‌کند."
         ),
-        "bench_btn_read": "خواندن ROM از ECU — قفل",
-        "bench_btn_write": "نوشتن روی ECU — قفل",
-        "bench_btn_unlock": "دسترسی امنیتی (Security Access) — قفل",
-        "bench_phase5": "فاز ۵ (کار مستقیم با ECU) — قفل و پیاده‌نشده:",
+        "bflash_title": "فلش Bench شبیه‌سازی‌شده (فاز ۵)",
+        "bflash_sim_badge": "SIMULATED — فقط ECU مجازی",
+        "bflash_intro": (
+            "این بخش فرایند چهارمرحله‌ای فلش و بازیابی را فقط روی ECU برنامه‌پذیر مجازی اجرا"
+            " می‌کند. هیچ ECU، آداپتور یا درگاه واقعی در دسترس نیست و هیچ گزینه‌ای برای انتخاب"
+            " آن وجود ندارد."
+        ),
+        "bflash_mode_inactive": "حالت فلش Bench غیرفعال است.",
+        "bflash_mode_active": "حالت فلش Bench برای همین پنجره فعال است (اپراتور: {0}).",
+        "bflash_enable": "فعال‌سازی حالت فلش Bench…",
+        "bflash_disable": "خروج از حالت فلش Bench",
+        "bflash_source_demo": "تصویر: ROM نمایشی SIMULATED (همراه با تعریف چک‌سام‌ها)",
+        "bflash_source_file": "تصویر: {0} — تعریف‌ها: {1}",
+        "bflash_no_maps": "ندارد",
+        "bflash_choose_rom": "انتخاب فایل ROM…",
+        "bflash_use_demo": "استفاده از ROM نمایشی",
+        "bflash_allow_unverified": ("اجازه چک‌سام تأییدنشده (فقط شبیه‌سازی؛ در ژورنال ثبت می‌شود)"),
+        "bflash_fault_label": "خطای شبیه‌ساز (آموزشی):",
+        "bflash_faults": {
+            "none": "بدون خطا",
+            "power_loss": "قطع برق در بلوک ۲۰",
+            "drop": "قطع ارتباط در بلوک ۳",
+            "nrc72": "پاسخ منفی 0x72 در بلوک ۲",
+            "bad_key": "کلید امنیتی نادرست",
+            "corrupt_readback": "خراب شدن بازخوانی مرحله ۴",
+        },
+        "bflash_start": "شروع فلش شبیه‌سازی‌شده",
+        "bflash_cancel": "لغو",
+        "bflash_discard": "کنار گذاشتن ژورنال کهنه…",
+        "bflash_inspect": "بررسی ژورنال",
+        "bflash_do_not_disconnect": (
+            "⚠️ پاک‌سازی حافظه آغاز شده است. اتصال را قطع نکنید و برنامه را نبندید؛ لغو دیگر"
+            " ممکن نیست. اگر فرایند قطع شود، ژورنال بازیابی را ممکن می‌کند."
+        ),
+        "bflash_journal_label": "ژورنال:",
+        "bflash_dir_label": "پوشه Bench:",
+        "bflash_backup_label": "فایل پشتیبان:",
+        "bflash_sha_label": "SHA-256 پشتیبان:",
+        "bflash_steps": {
+            "pre_flight": "پیش‌پرواز",
+            "backup": "پشتیبان کامل اجباری",
+            "programming": "انتقال برنامه",
+            "verify": "بازبینی",
+        },
+        "bflash_idle": "آماده.",
+        "bflash_progress_bytes": "{0}: {1}/{2} بایت ({3}٪)",
+        "bflash_progress_block": "بلوک {0}",
+        "bflash_journal_unknown": "هنوز بررسی نشده",
+        "bflash_journal_status": {
+            "clean": "تمیز",
+            "stale": "کهنه (ECU دست‌نخورده)",
+            "dirty": "ناتمام — بازیابی لازم است",
+            "corrupt": "خراب — بررسی دستی لازم است",
+        },
+        "bflash_states": {
+            "pending": "در انتظار (ECU دست‌نخورده)",
+            "backup_verified": "پشتیبان تأییدشده",
+            "erasing": "در حال پاک کردن",
+            "transferring": "در حال انتقال",
+            "verifying": "در حال بازبینی",
+            "completed": "کامل شد",
+            "aborted": "متوقف پیش از پاک‌سازی (ECU دست‌نخورده)",
+            "interrupted": "قطع‌شده — بازیابی لازم است",
+            "recovering": "در حال بازیابی",
+            "recovered": "بازیابی شد",
+            "recovery_failed": "بازیابی ناموفق — دوباره تلاش کنید",
+        },
+        "bflash_result_ok": "✓ فلش کامل شد و با روتین بررسی و بازخوانی تأیید شد.",
+        "bflash_result_recovered": "✓ پشتیبان تأییدشده بازگردانده و بازبینی شد.",
+        "bflash_result_cancelled": (
+            "فلش پیش از پاک‌سازی لغو شد؛ حافظه ECU شبیه‌سازی‌شده دست‌نخورده است."
+        ),
+        "bflash_result_aborted": (
+            "فلش پیش از پاک‌سازی متوقف شد؛ حافظه ECU شبیه‌سازی‌شده دست‌نخورده است."
+        ),
+        "bflash_result_recovery_required": (
+            "✗ فلش پس از شروع پاک‌سازی قطع شد. حافظه ممکن است ناقص باشد: بازیابی را اجرا کنید."
+        ),
+        "bflash_refused": "درخواست رد شد؛ چیزی ارسال یا تغییر داده نشد.",
+        "bflash_discarded": "ژورنال کهنه بایگانی شد.",
+        "bflash_error": "خطا در کار Bench.",
+        "bflash_journal_title": "ژورنال تراکنش فلش",
+        "bflash_journal_fields": {
+            "status": "وضعیت",
+            "detail": "توضیح",
+            "path": "فایل ژورنال",
+            "state": "حالت",
+            "transaction": "تراکنش",
+            "target": "هدف",
+            "image": "تصویر",
+            "backup": "پشتیبان",
+            "backup_sha": "SHA-256 پشتیبان",
+            "progress": "آخرین پیشرفت ذخیره‌شده",
+            "reason": "علت توقف",
+            "history": "تاریخچه",
+        },
+        "bflash_dialog_close": "بستن",
+        "bflash_dialog_cancel": "انصراف",
+        "bflash_modal_title": {
+            "flash": "فعال‌سازی حالت فلش Bench (شبیه‌سازی)",
+            "recovery": "بازیابی اضطراری (شبیه‌سازی)",
+        },
+        "bflash_modal_intro": {
+            "flash": (
+                "این تأیید فقط برای همین پنجره معتبر است و هیچ‌جا ذخیره نمی‌شود. جمله‌های زیر"
+                " را نرم‌افزار نمی‌تواند بسنجد، پس شما تأییدشان می‌کنید؛ بررسی‌های ماشینی را"
+                " خود نرم‌افزار انجام می‌دهد."
+            ),
+            "recovery": (
+                "پشتیبان تأییدشده‌ای که در ژورنال ثبت شده بازگردانده می‌شود؛ پشتیبان تازه‌ای"
+                " گرفته نمی‌شود. پیش از ادامه، جمله‌های زیر را دوباره تأیید کنید."
+            ),
+        },
+        "bflash_statements_title": "تأیید انسانی",
+        "bflash_statements": {
+            "ecu_on_bench_out_of_vehicle": "ECU روی میز کار است و به هیچ خودرویی وصل نیست.",
+            "supply_stable_and_current_limited": (
+                "منبع تغذیه میز پایدار و دارای محدودیت جریان است."
+            ),
+            "wiring_verified": "سیم‌کشی تغذیه، زمین و CAN بررسی شده است.",
+            "owner_approval_recorded": "صاحب پروژه این عملیات مشخص را تأیید کرده است.",
+        },
+        "bflash_checks_title": "بررسی‌های ماشینی",
+        "bflash_checks": {
+            "journal_clean": "هیچ ژورنالی مانع فلش جدید نیست",
+            "journal_recoverable": "ژورنال ناتمام با پشتیبان ثبت‌شده",
+            "backup_dir_writable": "پوشه پشتیبان قابل نوشتن است",
+            "free_space": "فضای کافی برای پشتیبان",
+            "image_valid": "تصویر برای این هدف پذیرفته شد",
+            "checksums_valid": "چک‌سام‌ها معتبرند",
+            "backup_verified": "پشتیبان روی دیسک دوباره تأیید شد",
+            "target_simulated": "هدف ECU شبیه‌سازی‌شده است",
+        },
+        "bflash_check_override": "تأییدنشده؛ فقط با اجازه شبیه‌سازی",
+        "bflash_operator": "نام اپراتور:",
+        "bflash_phrase": "عبارت تأیید را دقیقاً تایپ کنید: {0}",
+        "bflash_missing": "هنوز لازم است: {0}",
+        "bflash_unmet": {
+            "ecu_on_bench_out_of_vehicle": "ECU روی میز",
+            "supply_stable_and_current_limited": "منبع تغذیه",
+            "wiring_verified": "سیم‌کشی",
+            "owner_approval_recorded": "تأیید صاحب پروژه",
+            "operator": "نام اپراتور",
+            "confirmation_phrase": "عبارت تأیید",
+            "machine_checks": "بررسی‌های ماشینی",
+        },
+        "bflash_session_note": ("این حالت با بستن پنجره یا «خروج از حالت فلش Bench» پایان می‌یابد."),
+        "bflash_confirm": {
+            "flash": "تأیید و فعال‌سازی",
+            "recovery": "تأیید و شروع بازیابی",
+        },
+        "bflash_rom_dialog": "انتخاب ROM برای فلش شبیه‌سازی‌شده",
+        "bflash_maps_dialog": "تعریف نقشه‌ها با بلوک‌های چک‌سام (اختیاری)",
+        "bflash_discard_title": "کنار گذاشتن ژورنال کهنه",
+        "bflash_discard_text": (
+            "این ژورنال پیش از هر پاک‌سازی متوقف شده است (ECU دست‌نخورده). آن را بایگانی کنیم"
+            " تا فلش جدید ممکن شود؟"
+        ),
+        "bflash_banner_dirty": (
+            "🚨 بازیابی اضطراری: یک فلش Bench شبیه‌سازی‌شده ناتمام مانده است ({0}). حافظه ECU"
+            " ممکن است ناقص باشد و هر فلش جدیدی مسدود است. پوشه: {1}"
+        ),
+        "bflash_banner_corrupt": (
+            "🚨 ژورنال فلش Bench خراب است و وضعیت ECU نامعلوم است. همه فلش‌ها مسدودند تا ژورنال"
+            " دستی بررسی شود: {0}"
+        ),
+        "bflash_banner_recover": "شروع بازیابی",
+        "bflash_banner_inspect": "بررسی ژورنال",
         "bench_open": "باز کردن ROM…",
         "bench_open_demo": "باز کردن نمونه شبیه‌سازی",
         "bench_load_defs": "بارگذاری تعریف نقشه‌ها…",
@@ -513,6 +678,9 @@ COPY: dict[str, dict[str, Any]] = {
             "msg.port_scan": "بازخوانی درگاه‌ها: {0} → {1} گزینه",
             "msg.recording_started": "ضبط شروع شد: {0}",
             "msg.recording_stopped": "ضبط متوقف شد ({0} نمونه): {1}",
+            "msg.bench_journal_dirty": (
+                "ژورنال فلش Bench ناتمام یا خراب است ({0})؛ بازیابی یا بررسی لازم است"
+            ),
             "msg.recording_error": "خطای ضبط: {0}",
         },
     },
@@ -645,14 +813,188 @@ COPY: dict[str, dict[str, Any]] = {
         },
         "bench_title": "ROM workbench (offline file analysis)",
         "bench_warning": (
-            "Phase 4: offline file analysis only. Nothing is read from or written to any ECU."
-            " Exported files are not validated for any vehicle or ECU, and this program cannot"
-            " flash them."
+            "ROM workbench: offline file analysis only. Nothing is read from or written to any"
+            " ECU from here, and an exported file is not approved for any vehicle or ECU. The"
+            " bench flash below works against the simulated ECU only."
         ),
-        "bench_btn_read": "Read ROM from ECU — locked",
-        "bench_btn_write": "Write to ECU — locked",
-        "bench_btn_unlock": "Security Access — locked",
-        "bench_phase5": "Phase 5 (direct ECU work) — locked, not implemented:",
+        "bflash_title": "Simulated bench flash (Phase 5)",
+        "bflash_sim_badge": "SIMULATED — virtual ECU only",
+        "bflash_intro": (
+            "Runs the four-stage flash and its recovery against the virtual programmable ECU"
+            " only. No real ECU, adapter or port can be reached, and there is no option to"
+            " choose one."
+        ),
+        "bflash_mode_inactive": "Bench flash mode is off.",
+        "bflash_mode_active": "Bench flash mode is on for this window (operator: {0}).",
+        "bflash_enable": "Enable bench flash mode…",
+        "bflash_disable": "Leave bench flash mode",
+        "bflash_source_demo": "Image: the SIMULATED demo ROM (with its checksum definitions)",
+        "bflash_source_file": "Image: {0} — definitions: {1}",
+        "bflash_no_maps": "none",
+        "bflash_choose_rom": "Choose ROM file…",
+        "bflash_use_demo": "Use the demo ROM",
+        "bflash_allow_unverified": (
+            "Allow an unverified checksum (simulation only; recorded in the journal)"
+        ),
+        "bflash_fault_label": "Simulator fault (training):",
+        "bflash_faults": {
+            "none": "No fault",
+            "power_loss": "Power loss at block 20",
+            "drop": "Link drop at block 3",
+            "nrc72": "Negative response 0x72 at block 2",
+            "bad_key": "Wrong security key",
+            "corrupt_readback": "Corrupted stage-4 read-back",
+        },
+        "bflash_start": "Start simulated flash",
+        "bflash_cancel": "Cancel",
+        "bflash_discard": "Discard stale journal…",
+        "bflash_inspect": "Inspect journal",
+        "bflash_do_not_disconnect": (
+            "⚠️ The erase has started. Do not disconnect and do not close the program;"
+            " cancelling is no longer possible. If the run is interrupted, the journal makes a"
+            " recovery possible."
+        ),
+        "bflash_journal_label": "Journal:",
+        "bflash_dir_label": "Bench directory:",
+        "bflash_backup_label": "Backup file:",
+        "bflash_sha_label": "Backup SHA-256:",
+        "bflash_steps": {
+            "pre_flight": "Pre-flight",
+            "backup": "Mandatory full backup",
+            "programming": "Programming transfer",
+            "verify": "Verify",
+        },
+        "bflash_idle": "Ready.",
+        "bflash_progress_bytes": "{0}: {1}/{2} bytes ({3}%)",
+        "bflash_progress_block": "block {0}",
+        "bflash_journal_unknown": "not checked yet",
+        "bflash_journal_status": {
+            "clean": "clean",
+            "stale": "stale (ECU untouched)",
+            "dirty": "unfinished — recovery required",
+            "corrupt": "corrupt — inspect by hand",
+        },
+        "bflash_states": {
+            "pending": "pending (ECU untouched)",
+            "backup_verified": "backup verified",
+            "erasing": "erasing",
+            "transferring": "transferring",
+            "verifying": "verifying",
+            "completed": "completed",
+            "aborted": "stopped before any erase (ECU untouched)",
+            "interrupted": "interrupted — recovery required",
+            "recovering": "recovering",
+            "recovered": "recovered",
+            "recovery_failed": "recovery failed — try again",
+        },
+        "bflash_result_ok": (
+            "✓ Flash completed and verified by the check routine and the read-back."
+        ),
+        "bflash_result_recovered": "✓ The verified backup was restored and verified.",
+        "bflash_result_cancelled": (
+            "The flash was cancelled before any erase; the simulated ECU memory is untouched."
+        ),
+        "bflash_result_aborted": (
+            "The flash stopped before any erase; the simulated ECU memory is untouched."
+        ),
+        "bflash_result_recovery_required": (
+            "✗ The flash was interrupted after the erase started. The memory may be incomplete:"
+            " run the recovery."
+        ),
+        "bflash_refused": "Refused; nothing was sent or changed.",
+        "bflash_discarded": "The stale journal was archived.",
+        "bflash_error": "Bench error.",
+        "bflash_journal_title": "Flash transaction journal",
+        "bflash_journal_fields": {
+            "status": "Status",
+            "detail": "Detail",
+            "path": "Journal file",
+            "state": "State",
+            "transaction": "Transaction",
+            "target": "Target",
+            "image": "Image",
+            "backup": "Backup",
+            "backup_sha": "Backup SHA-256",
+            "progress": "Last saved progress",
+            "reason": "Stopped because",
+            "history": "History",
+        },
+        "bflash_dialog_close": "Close",
+        "bflash_dialog_cancel": "Cancel",
+        "bflash_modal_title": {
+            "flash": "Enable bench flash mode (simulation)",
+            "recovery": "Emergency recovery (simulation)",
+        },
+        "bflash_modal_intro": {
+            "flash": (
+                "This confirmation holds for this window only and is never stored. The software"
+                " cannot measure the statements below, so you confirm them; it verifies the"
+                " machine checks itself."
+            ),
+            "recovery": (
+                "The verified backup recorded in the journal is restored; no new backup is"
+                " taken. Confirm the statements below again before continuing."
+            ),
+        },
+        "bflash_statements_title": "Human attestation",
+        "bflash_statements": {
+            "ecu_on_bench_out_of_vehicle": (
+                "The ECU is on the bench, not connected to any vehicle."
+            ),
+            "supply_stable_and_current_limited": (
+                "The bench supply is stable and current limited."
+            ),
+            "wiring_verified": "Power, ground and CAN wiring were checked.",
+            "owner_approval_recorded": "The project owner approved this specific operation.",
+        },
+        "bflash_checks_title": "Machine checks",
+        "bflash_checks": {
+            "journal_clean": "No journal blocks a new flash",
+            "journal_recoverable": "Unfinished journal with a recorded backup",
+            "backup_dir_writable": "The backup directory is writable",
+            "free_space": "Enough free space for the backup",
+            "image_valid": "The image is accepted for this target",
+            "checksums_valid": "The checksums are valid",
+            "backup_verified": "The backup verified again on disk",
+            "target_simulated": "The target is the simulated ECU",
+        },
+        "bflash_check_override": "unverified; allowed by the simulation override only",
+        "bflash_operator": "Operator name:",
+        "bflash_phrase": "Type the confirmation phrase exactly: {0}",
+        "bflash_missing": "Still needed: {0}",
+        "bflash_unmet": {
+            "ecu_on_bench_out_of_vehicle": "ECU on the bench",
+            "supply_stable_and_current_limited": "bench supply",
+            "wiring_verified": "wiring",
+            "owner_approval_recorded": "owner approval",
+            "operator": "operator name",
+            "confirmation_phrase": "confirmation phrase",
+            "machine_checks": "machine checks",
+        },
+        "bflash_session_note": (
+            'The mode ends when this window closes or with "Leave bench flash mode".'
+        ),
+        "bflash_confirm": {
+            "flash": "Confirm and enable",
+            "recovery": "Confirm and start recovery",
+        },
+        "bflash_rom_dialog": "Choose a ROM for the simulated flash",
+        "bflash_maps_dialog": "Map definitions with checksum blocks (optional)",
+        "bflash_discard_title": "Discard the stale journal",
+        "bflash_discard_text": (
+            "This journal stopped before any erase (the ECU is untouched). Archive it so that a"
+            " new flash can start?"
+        ),
+        "bflash_banner_dirty": (
+            "🚨 Emergency recovery: a simulated bench flash did not finish ({0}). The ECU memory"
+            " may be incomplete and every new flash is blocked. Directory: {1}"
+        ),
+        "bflash_banner_corrupt": (
+            "🚨 The bench flash journal is corrupt and the ECU state is unknown. Every flash is"
+            " blocked until the journal is inspected by hand: {0}"
+        ),
+        "bflash_banner_recover": "Start recovery",
+        "bflash_banner_inspect": "Inspect journal",
         "bench_open": "Open ROM…",
         "bench_open_demo": "Open SIMULATED demo",
         "bench_load_defs": "Load map definitions…",
@@ -1014,6 +1356,9 @@ COPY: dict[str, dict[str, Any]] = {
             "msg.port_scan": "Port list refreshed: {0} -> {1} entries",
             "msg.recording_started": "Recording started: {0}",
             "msg.recording_stopped": "Recording stopped ({0} samples): {1}",
+            "msg.bench_journal_dirty": (
+                "Bench flash journal is unfinished or corrupt ({0}): recover or inspect it"
+            ),
             "msg.recording_error": "Recording error: {0}",
         },
     },

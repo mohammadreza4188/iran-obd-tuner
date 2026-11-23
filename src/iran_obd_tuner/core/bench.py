@@ -50,6 +50,7 @@ from iran_obd_tuner.core.safety import OperationClass, SafetyPolicy
 __all__ = [
     "BENCH_CONFIRMATION_PHRASE",
     "DIRTY_JOURNAL_STATES",
+    "ERASE_PROGRESS_MESSAGE",
     "JOURNAL_TRANSITIONS",
     "SIMULATED_BENCH_TARGET",
     "SOFTWARE_IDENTIFICATION_DIDS",
@@ -684,6 +685,10 @@ class FlashProgress:
 
 
 ProgressSink = Callable[[FlashProgress], None]
+
+#: ``FlashProgress.message`` of the report sent right after ``erasing`` was journaled and
+#: before the first erase request: the point of no return (the UI locks "cancel" there).
+ERASE_PROGRESS_MESSAGE: Final = "erase"
 
 
 @runtime_checkable

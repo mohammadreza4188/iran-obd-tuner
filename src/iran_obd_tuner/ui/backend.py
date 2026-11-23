@@ -7,15 +7,27 @@ backend that builds sessions over scripted simulated adapters.
 
 This module imports no Qt, so it is importable (and type-checkable) without the ``[gui]``
 extra.
+
+Milestone 7f adds :class:`BenchFlashService`: the simulated bench flash as the Bench tab sees
+it. It speaks only :mod:`iran_obd_tuner.core.bench_reports` value objects and the human
+:class:`~iran_obd_tuner.core.bench.BenchAttestation`; capabilities, the policy and every
+``tuning`` type stay behind it (architecture tests).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from iran_obd_tuner.core.bench import BenchAttestation, ProgressSink
+from iran_obd_tuner.core.bench_reports import (
+    BenchFlashReport,
+    BenchJournalReport,
+    BenchPreflightReport,
+    SimulatedFault,
+)
 from iran_obd_tuner.core.calibration import (
     ChecksumResult,
     CompatibilityReport,
@@ -33,7 +45,7 @@ from iran_obd_tuner.diagnostics.dyno import VehicleParameters
 from iran_obd_tuner.diagnostics.ecu_identification import UdsIdentificationSession
 from iran_obd_tuner.diagnostics.live_data import LiveDataSession
 
-__all__ = ["BenchWorkspace", "CanDefaults", "DashboardBackend"]
+__all__ = ["BenchFlashService", "BenchWorkspace", "CanDefaults", "DashboardBackend"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,8 +107,65 @@ class BenchWorkspace(Protocol):
     ) -> ExportResult: ...
 
 
+class BenchFlashService(Protocol):
+    """Simulated bench flashing (implemented by ``app/bench_flash.py``; Milestone 7f).
+
+    Only the virtual programmable ECU exists behind it. Every method is blocking (the Bench
+    tab runs them on a background thread); ``progress`` and ``cancel`` are called on that
+    thread. Refusals before anything was sent raise
+    :class:`~iran_obd_tuner.core.exceptions.IranObdTunerError` subclasses; once the journal
+    started, failures are returned as the report's state.
+    """
+
+    def assess_journal(self, output_dir: Path | str) -> BenchJournalReport: ...
+
+    def preflight_flash(
+        self,
+        output_dir: Path | str,
+        *,
+        rom_path: Path | str | None = None,
+        maps_path: Path | str | None = None,
+        allow_unverified_checksum_in_simulation: bool = False,
+    ) -> BenchPreflightReport: ...
+
+    def preflight_recovery(self, output_dir: Path | str) -> BenchPreflightReport: ...
+
+    def run_simulated_flash(
+        self,
+        output_dir: Path | str,
+        *,
+        rom_path: Path | str | None = None,
+        maps_path: Path | str | None = None,
+        fault: SimulatedFault | None = None,
+        allow_unverified_checksum_in_simulation: bool = False,
+        attestation: BenchAttestation | None = None,
+        progress: ProgressSink | None = None,
+        cancel: Callable[[], bool] | None = None,
+    ) -> BenchFlashReport: ...
+
+    def run_simulated_recovery(
+        self,
+        output_dir: Path | str,
+        *,
+        attestation: BenchAttestation | None = None,
+        progress: ProgressSink | None = None,
+    ) -> BenchFlashReport: ...
+
+    def discard_stale_journal(self, output_dir: Path | str) -> str: ...
+
+
 class DashboardBackend(Protocol):
     """Services the dashboard window uses."""
+
+    @property
+    def bench_flash_service(self) -> BenchFlashService:
+        """Simulated bench flashing (virtual programmable ECU only)."""
+        ...
+
+    @property
+    def bench_flash_dir(self) -> Path:
+        """The simulated bench directory (journal, backups, simulated ECU state)."""
+        ...
 
     def create_bench_workspace(self) -> BenchWorkspace:
         """A fresh offline Bench session (no file is opened yet)."""

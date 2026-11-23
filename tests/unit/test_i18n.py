@@ -30,6 +30,7 @@ VIEW_SOURCES = "".join(
         "uds_view.py",
         "knowledge_view.py",
         "bench_view.py",
+        "bench_flash_panel.py",
     )
 )
 
@@ -83,7 +84,17 @@ def test_no_key_is_written_twice() -> None:
 def test_persian_strings_are_persian() -> None:
     """Regression: duplicated keys once made Persian tabs show English text."""
     persian = re.compile(r"[؀-ۿ]")
-    for key in ("bench_title", "bench_warning", "ident_btn", "safety_heading", "sim_banner"):
+    for key in (
+        "bench_title",
+        "bench_warning",
+        "ident_btn",
+        "safety_heading",
+        "sim_banner",
+        "bflash_title",
+        "bflash_intro",
+        "bflash_do_not_disconnect",
+        "bflash_banner_dirty",
+    ):
         assert persian.search(COPY["fa"][key]), key
 
 
@@ -159,3 +170,26 @@ def test_nested_m3_tables_are_complete() -> None:
         )
         assert set(FREEZE_FRAME_PIDS) <= set(t["ff_params"])
         assert set(t["mil"]) == {"disconnected", "on", "off", "unknown"}
+
+
+def test_bench_flash_tables_are_complete() -> None:
+    """Milestone 7f: every journal state, stage, check and attestation item is translated."""
+    from iran_obd_tuner.core.bench import BenchAttestation, FlashStage, JournalState
+    from iran_obd_tuner.core.bench_reports import BenchCheckKey, BenchJournalStatus
+
+    for lang in LANGUAGES:
+        t = COPY[lang]
+        assert set(t["bflash_states"]) == {s.value for s in JournalState}
+        assert set(t["bflash_steps"]) == {s.value for s in FlashStage} - {"recovery"}
+        assert set(t["bflash_checks"]) == {k.value for k in BenchCheckKey}
+        assert set(t["bflash_journal_status"]) == {s.value for s in BenchJournalStatus}
+        assert set(t["bflash_statements"]) == set(BenchAttestation.STATEMENTS)
+        assert set(t["bflash_unmet"]) == {
+            *BenchAttestation.STATEMENTS,
+            "operator",
+            "confirmation_phrase",
+            "machine_checks",
+        }
+        for table in ("bflash_modal_title", "bflash_modal_intro", "bflash_confirm"):
+            assert set(t[table]) == {"flash", "recovery"}, table
+        assert "{0}" in t["bflash_phrase"]  # the fixed phrase is shown, never translated

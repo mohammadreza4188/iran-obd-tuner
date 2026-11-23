@@ -24,7 +24,10 @@ from iran_obd_tuner.core.bench import JournalState
 
 __all__ = [
     "BENCH_REPORT_SCHEMA_VERSION",
+    "BenchCheck",
+    "BenchCheckKey",
     "BenchFlashReport",
+    "BenchPreflightReport",
     "BenchJournalReport",
     "BenchJournalStatus",
     "SimulatedFault",
@@ -256,3 +259,64 @@ class BenchFlashReport:
             "fault": None if self.fault is None else self.fault.describe(),
             "fault_fired": self.fault_fired,
         }
+
+
+class BenchCheckKey(StrEnum):
+    """Machine checks shown before a simulated flash or recovery (Milestone 7f).
+
+    These are what the software can verify itself; the human statements are the
+    :class:`~iran_obd_tuner.core.bench.BenchAttestation`, asked separately.
+    """
+
+    JOURNAL_CLEAN = "journal_clean"  # flash: no journal blocks a new flash
+    JOURNAL_RECOVERABLE = "journal_recoverable"  # recovery: dirty journal with a backup
+    BACKUP_DIR_WRITABLE = "backup_dir_writable"
+    FREE_SPACE = "free_space"
+    IMAGE_VALID = "image_valid"  # the flash plan accepts the image (size, integrity)
+    CHECKSUMS_VALID = "checksums_valid"
+    BACKUP_VERIFIED = "backup_verified"  # recovery: the recorded backup verifies on disk
+    TARGET_SIMULATED = "target_simulated"
+
+
+@dataclass(frozen=True, slots=True)
+class BenchCheck:
+    """One machine check.
+
+    Attributes:
+        key: Which check (the UI translates by key).
+        ok: Whether it passed.
+        detail: Technical detail (English), e.g. the free bytes or why the plan refused.
+        override: Passed only because of the simulation-only unverified-checksum override.
+    """
+
+    key: BenchCheckKey
+    ok: bool
+    detail: str = ""
+    override: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BenchPreflightReport:
+    """The machine checks before a simulated flash or recovery (nothing was sent).
+
+    Attributes:
+        mode: ``flash`` or ``recovery``.
+        directory: The bench directory.
+        checks: In display order.
+        image_name / image_sha256: What would be written (the backup for a recovery).
+        image_simulated: The image is the SIMULATED demo ROM.
+    """
+
+    mode: str
+    directory: str
+    checks: tuple[BenchCheck, ...]
+    image_name: str | None = None
+    image_sha256: str | None = None
+    image_simulated: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return all(check.ok for check in self.checks)
+
+    def check(self, key: BenchCheckKey) -> BenchCheck | None:
+        return next((c for c in self.checks if c.key is key), None)

@@ -10,6 +10,8 @@ Implements :class:`iran_obd_tuner.ui.backend.DashboardBackend`: this is where th
   settings; the extended session only when the user ticked it for this run.
 * Vehicle knowledge base → the bundled vehicle packs plus ``knowledge_dir/vehicles``, loaded
   once (read-only) for the Vehicle Knowledge tab.
+* Simulated bench flash (Milestone 7f) → :class:`~iran_obd_tuner.app.bench_flash.
+  BenchFlashService` (virtual programmable ECU only) on ``output_dir/bench-flash-sim``.
 * Real adapter → the read-only ``elm327`` adapter on the port the user selected, with the
   baud rate and command timeout from the settings. Without an explicit port the request
   fails with :class:`~iran_obd_tuner.core.exceptions.ConfigurationError` (no automatic
@@ -23,6 +25,7 @@ from pathlib import Path
 
 from iran_obd_tuner.app.application import uds_link_config
 from iran_obd_tuner.app.bench import AppBenchWorkspace
+from iran_obd_tuner.app.bench_flash import BenchFlashService
 from iran_obd_tuner.core.config import CAN_INTERFACE_CHOICES, AppSettings
 from iran_obd_tuner.core.exceptions import ConfigurationError
 from iran_obd_tuner.core.knowledge import LocalizedText, Manufacturer, VehicleProfile
@@ -42,7 +45,10 @@ from iran_obd_tuner.hardware.serial_ports import list_serial_ports
 from iran_obd_tuner.hardware.uds_link import SIMULATED_INTERFACE
 from iran_obd_tuner.ui.backend import CanDefaults
 
-__all__ = ["AppDashboardBackend"]
+__all__ = ["SIMULATED_BENCH_DIR_NAME", "AppDashboardBackend"]
+
+#: Sub-directory of ``output_dir`` that holds the dashboard's simulated bench.
+SIMULATED_BENCH_DIR_NAME = "bench-flash-sim"
 
 
 class AppDashboardBackend:
@@ -70,6 +76,7 @@ class AppDashboardBackend:
         )
         # One log for the whole dashboard: every session's adapter records into it.
         self._traffic_log = TrafficLog()
+        self._bench_flash = BenchFlashService()
         try:
             self._dyno_parameters = self._build_dyno_parameters()
         except ValueError as exc:
@@ -117,6 +124,14 @@ class AppDashboardBackend:
             channel=s.can_channel,
             bitrate=s.can_bitrate,
         )
+
+    @property
+    def bench_flash_service(self) -> BenchFlashService:
+        return self._bench_flash
+
+    @property
+    def bench_flash_dir(self) -> Path:
+        return self._settings.output_dir / SIMULATED_BENCH_DIR_NAME
 
     def create_bench_workspace(self) -> AppBenchWorkspace:
         return AppBenchWorkspace(self._settings.output_dir)

@@ -157,6 +157,20 @@ QT_QPA_PLATFORM=offscreen iran-obd-tuner-gui   # روی ماشین بدون نم
 `SimulatedEcuConfig` بسازید. سرویس جدید UDS فقط پس از افزودن به `ALLOWED_REQUESTS` قابل ارسال است
 و تست فهرست سفید (`test_allowlist_is_exactly_the_read_only_set`) باید آگاهانه به‌روز شود.
 
+### فلش Bench شبیه‌سازی‌شده: تست بدون سخت‌افزار (Milestone 7)
+
+- **قطعی و تک‌thread:** `iso_tp_ecu_responder` در `tests/conftest.py` درخواست‌های چندفریمی را
+  بازسازی می‌کند. `BenchProgrammer` واقعی روی ISO-TP واقعی با `VirtualProgrammableEcu` و ساعت جعلی کار
+  می‌کند (`test_bench_programmer.py`، `test_flash_orchestrator.py`، `test_unit_identity_binding.py`).
+- **انتها به انتها:** CLI (`test_bench_flash_cli.py`)، سرویس (`test_bench_flash_service.py`) و داشبورد
+  (`test_gui_bench_flash.py`) روی باس `virtual` python-can. بدون `[can]` (و برای داشبورد بدون `[gui]`)
+  خودکار skip می‌شوند.
+- برای خطای تازه، `FaultPlan` را گسترش دهید (هر fault فقط یک بار رخ می‌دهد) و آن را از طریق
+  `hardware/bench_link.py` در دسترس بگذارید، چون فقط همین ماژول شبیه‌ساز برنامه‌پذیر را import می‌کند.
+- فایل‌ها: پوشه Bench شامل ژورنال، `backups/` و `SIMULATED-bench-ecu-state.json` است. در تست همیشه از
+  `tmp_path` استفاده کنید.
+- سند فرایند و ناوردها: [`bench-flash-protocol.md`](bench-flash-protocol.md).
+
 ### پایگاه دانش خودرو، تطبیق و بسته شواهد: تست بدون سخت‌افزار
 
 بسته ساختگی `tests/fixtures/vehicle_packs/vehicles/fixturemotors.json` (سازنده خیالی «Fixture Motors»)
@@ -254,7 +268,9 @@ JSON گزارش می‌دهد (مثلاً `ikco.json: vehicles[0].variants[1].en
 
 ### د) قابلیت نوشتنی روی ECU (فلش/کالیبراسیون)
 
-در این مرحله **مجاز نیست** (فاز ۵ قفل است؛ خروجی فایل در میز کار ROM نوشتن روی ECU نیست). اگر تیم تصمیم گرفت، باید هم‌زمان با پیاده‌سازی:
+فلش Bench فقط روی ECU مجازی وجود دارد (Milestone 7، [`bench-flash-protocol.md`](bench-flash-protocol.md)).
+هر چیزی که به ECU واقعی برسد در این مرحله **مجاز نیست**: profile واقعی هنگام ساخت رد می‌شود و هیچ
+گزینه رابط یا درگاهی برای فلش وجود ندارد. اگر تیم تصمیم گرفت، باید هم‌زمان با پیاده‌سازی:
 تأیید صریح کارفرما، شواهد فنی خانواده ECU، عبور همه مسیرها از
 `tuning.interfaces.assert_write_allowed()`، مسیر پشتیبان‌گیری/بازگردانی و تست روی ECU Bench
 (دور از خودرو) انجام شود. اسکلت فعلی فقط مرز و پیش‌نیازها را تعریف کرده است.

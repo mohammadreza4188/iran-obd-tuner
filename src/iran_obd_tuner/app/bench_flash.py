@@ -54,9 +54,12 @@ from iran_obd_tuner.core.bench import (
     bench_flash_policy,
 )
 from iran_obd_tuner.core.bench_reports import (
+    BenchCheck,
+    BenchCheckKey,
     BenchFlashReport,
     BenchJournalReport,
     BenchJournalStatus,
+    BenchPreflightReport,
     SimulatedFault,
     SimulatedFaultKind,
 )
@@ -64,6 +67,7 @@ from iran_obd_tuner.core.exceptions import (
     BenchTargetNotQualifiedError,
     ConfigurationError,
     IranObdTunerError,
+    RomError,
 )
 from iran_obd_tuner.core.models import utc_now
 from iran_obd_tuner.hardware.bench_link import (
@@ -75,10 +79,14 @@ from iran_obd_tuner.hardware.bench_link import (
     simulated_bench_ecu,
     simulated_seed_key,
 )
-from iran_obd_tuner.tuning.backup_vault import BackupVault
+from iran_obd_tuner.tuning.backup_vault import BackupError, BackupVault
 from iran_obd_tuner.tuning.checksum import ChecksumBlock
 from iran_obd_tuner.tuning.demo import load_demo
-from iran_obd_tuner.tuning.flash_gate import authorize_bench_flash, authorize_bench_recovery
+from iran_obd_tuner.tuning.flash_gate import (
+    authorize_bench_flash,
+    authorize_bench_recovery,
+    machine_checks,
+)
 from iran_obd_tuner.tuning.flash_journal import (
     AssessmentStatus,
     FlashJournal,
@@ -97,9 +105,11 @@ from iran_obd_tuner.tuning.rom_loader import RomImage, load_rom
 
 __all__ = [
     "BACKUP_DIR_NAME",
+    "CANCELLABLE_STAGES",
     "ECU_STATE_NAME",
     "SIMULATED_BLOCK_LENGTH",
     "SIMULATED_OPERATOR",
+    "BenchFlashCancelled",
     "BenchFlashService",
     "FlashBlockedError",
     "FlashPlanError",
@@ -126,6 +136,15 @@ _CORRUPT_READBACK_BLOCK = 1
 
 class SimulatedBenchStateError(IranObdTunerError):
     """The saved state of the simulated bench ECU is unreadable (fail closed)."""
+
+
+class BenchFlashCancelled(IranObdTunerError):
+    """The operator cancelled the flash before any erase (the ECU memory is untouched)."""
+
+
+#: Stages in which a cancel request is honoured: before the erase only. From the erase on a
+#: half-written ECU must never be abandoned mid-way (decision D3).
+CANCELLABLE_STAGES = frozenset({FlashStage.PRE_FLIGHT, FlashStage.BACKUP})
 
 
 def simulated_attestation(
@@ -399,6 +418,98 @@ class BenchFlashService:
         """``clean`` / ``stale`` / ``dirty`` / ``corrupt`` verdict on a bench directory."""
         return journal_report(output_dir)
 
+    def preflight_flash(
+        self,
+        output_dir: Path | str,
+        *,
+        rom_path: Path | str | None = None,
+        maps_path: Path | str | None = None,
+        allow_unverified_checksum_in_simulation: bool = False,
+    ) -> BenchPreflightReport:
+        """The machine checks of a flash (read-only: nothing is written or sent)."""
+        directory = Path(output_dir)
+        journal = self.assess_journal(directory)
+        checks = [
+            BenchCheck(
+                BenchCheckKey.JOURNAL_CLEAN,
+                not journal.blocks_new_flash,
+                "" if not journal.blocks_new_flash else f"{journal.status}: {journal.detail}",
+            )
+        ]
+        name = sha = None
+        image_simulated = False
+        try:
+            rom, blocks = self._load_image(rom_path, maps_path)
+            name, sha, image_simulated = rom.name, rom.sha256, rom.simulated
+            plan = build_flash_plan(
+                rom,
+                SIMULATED_BENCH_TARGET,
+                checksum_blocks=blocks,
+                allow_unverified_checksum_in_simulation=allow_unverified_checksum_in_simulation,
+            )
+        except (FlashPlanError, RomError, ConfigurationError) as exc:
+            checks.append(BenchCheck(BenchCheckKey.IMAGE_VALID, False, str(exc)))
+            return BenchPreflightReport(
+                "flash", str(directory), tuple(checks), name, sha, image_simulated
+            )
+        machine = machine_checks(plan, directory / BACKUP_DIR_NAME)
+        checks += [
+            BenchCheck(BenchCheckKey.IMAGE_VALID, machine.image_fits_target, plan.image_name),
+            BenchCheck(
+                BenchCheckKey.CHECKSUMS_VALID,
+                machine.checksums_valid or plan.unverified_checksum_override,
+                ", ".join(f"{r.block_id or '-'}={r.status}" for r in plan.checksums),
+                override=plan.unverified_checksum_override,
+            ),
+            BenchCheck(
+                BenchCheckKey.BACKUP_DIR_WRITABLE,
+                machine.backup_dir_writable,
+                str(directory / BACKUP_DIR_NAME),
+            ),
+            BenchCheck(
+                BenchCheckKey.FREE_SPACE,
+                machine.enough_space,
+                f"{machine.free_bytes} free, {machine.required_bytes} needed",
+            ),
+            BenchCheck(BenchCheckKey.TARGET_SIMULATED, machine.target_simulated),
+        ]
+        return BenchPreflightReport(
+            "flash", str(directory), tuple(checks), name, sha, image_simulated
+        )
+
+    def preflight_recovery(self, output_dir: Path | str) -> BenchPreflightReport:
+        """The machine checks of a recovery (read-only: the backup is only re-read)."""
+        directory = Path(output_dir)
+        journal = self.assess_journal(directory)
+        checks = [
+            BenchCheck(
+                BenchCheckKey.JOURNAL_RECOVERABLE,
+                journal.can_recover,
+                f"{journal.status}: {journal.detail}",
+            )
+        ]
+        if journal.can_recover:
+            try:
+                record = FlashJournal.load(directory).backup_record
+                assert record is not None
+                BackupVault(directory / BACKUP_DIR_NAME).receipt_from_record(record)
+                checks.append(
+                    BenchCheck(BenchCheckKey.BACKUP_VERIFIED, True, journal.backup_path or "")
+                )
+            except (BackupError, JournalError) as exc:
+                checks.append(BenchCheck(BenchCheckKey.BACKUP_VERIFIED, False, str(exc)))
+        checks.append(
+            BenchCheck(
+                BenchCheckKey.TARGET_SIMULATED,
+                journal.simulated is True and journal.target_id == SIMULATED_BENCH_TARGET.target_id,
+                journal.target_id or "",
+            )
+        )
+        name = None if journal.backup_path is None else Path(journal.backup_path).name
+        return BenchPreflightReport(
+            "recovery", str(directory), tuple(checks), name, journal.backup_sha256
+        )
+
     # ------------------------------------------------------------------ flash
     def run_simulated_flash(
         self,
@@ -410,10 +521,13 @@ class BenchFlashService:
         allow_unverified_checksum_in_simulation: bool = False,
         attestation: BenchAttestation | None = None,
         progress: ProgressSink | None = None,
+        cancel: Callable[[], bool] | None = None,
     ) -> BenchFlashReport:
         """Run the four stages against the simulated bench ECU of ``output_dir``.
 
         Without ``rom_path`` the SIMULATED demo ROM and its map definitions are flashed.
+        ``cancel`` is polled at every progress report of the stages in
+        :data:`CANCELLABLE_STAGES`; once the erase started it is ignored.
 
         Raises:
             ConfigurationError / RomError: Unusable arguments or input files.
@@ -421,6 +535,7 @@ class BenchFlashService:
                 the simulated-only override).
             FlashBlockedError / SafetyGuardError: The journal or the gate refuses - before
                 anything is sent. Failures after the journal started are returned.
+            BenchFlashCancelled: Cancelled in the pre-flight, before the journal started.
         """
         directory = Path(output_dir)
         rom, blocks = self._load_image(rom_path, maps_path)
@@ -458,6 +573,10 @@ class BenchFlashService:
                 armed = True
             if progress is not None:
                 progress(report)
+            if cancel is not None and report.stage in CANCELLABLE_STAGES and cancel():
+                # before the journal starts this propagates (nothing happened); during the
+                # backup the orchestrator journals it as ``aborted`` (the ECU is untouched)
+                raise BenchFlashCancelled("cancelled by the operator before any erase")
 
         opened = False
         try:

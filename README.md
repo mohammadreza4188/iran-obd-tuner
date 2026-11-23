@@ -7,8 +7,11 @@
 > strictly **read-only** diagnostic workflow driven by an in-memory simulated adapter, a
 > PySide6 dashboard (phase 1) that uses the very same adapter contract, and the project scaffolding
 > (packaging, config, logging, tests, CI, docs) the team needs to grow it. No ECU write/flash
-> functionality exists — clearing trouble codes from the dashboard is refused by the safety
-> policy — and none is planned before explicit approval and vehicle-specific validation.
+> functionality exists for any real ECU — clearing trouble codes from the dashboard is refused by
+> the safety policy. Phase 5 bench flashing (backup, four-stage flash, crash-safe journal and
+> recovery) exists **only against a virtual programmable ECU** (Milestone 7, CLI `bench flash-sim`
+> and the dashboard's Bench tab); a real ECU needs an evidence-backed target profile and a separate
+> owner approval. See [`docs/bench-flash-protocol.md`](docs/bench-flash-protocol.md).
 
 ---
 
@@ -67,6 +70,9 @@
 | موتور چک‌سام با تعریف دقیق: `sum8`، `sum16_le/be`، `crc16_ccitt_false`، `crc32`، `twos_complement_8/16_le`؛ «معتبر» یعنی مطابق الگوریتم تعریف‌شده، نه پذیرش ECU | `tuning/checksum.py` |
 | خروجی ROM اصلاح‌شده **فقط به فایلی دیگر** (هرگز روی فایل اصلی)، با تأیید صریح کاربر، رد شدن در صورت چک‌سام نامعتبر، و فایل مانیفست (`validated_for_vehicle: false`). **هیچ فلشی وجود ندارد** | `tuning/rom_export.py` |
 | تب «میز کار ROM» در داشبورد (نقشه حرارتی، نماهای اصلی/اصلاح‌شده/تفاوت/٪، Undo/Redo، وضعیت چک‌سام) و CLI `bench inspect/table/demo` | `ui/bench_view.py`, `app/bench.py`, `app/cli.py` |
+| **فلش Bench شبیه‌سازی‌شده (Milestone 7، فاز ۵، فقط ECU مجازی):** پشتیبان کامل اجباری (دو خواندن برابر، نوشتن یک‌باره، بازخوانی از دیسک)، فلش چهارمرحله‌ای، ژورنال اتمیک تراکنش، بازیابی از پشتیبان تأییدشده با پیوند به هویت قطعه، و تزریق خطای قطعی. capabilityهای `FlashAuthorization`/`BackupReceipt`، attestation انسانی و تست‌های AST. هیچ رابط یا ECU واقعی در دسترس نیست | `core/bench.py`, `tuning/flash_*.py`, `tuning/backup_vault.py`, `hardware/bench_*.py`, `app/bench_flash.py` |
+| CLI `bench flash-sim [--recover]` و `bench journal show/discard-stale`، با کد خروج `3` برای ژورنال ناتمام | `app/cli.py` |
+| پنل «فلش Bench شبیه‌سازی‌شده» در تب Bench: modal تأیید (چهار جمله، بررسی‌های ماشینی ✓/✗، نام اپراتور، `BENCH FLASH`) فقط برای همان پنجره، نمایشگر چهارمرحله‌ای با قفل لغو از شروع erase، و بنر قرمز «بازیابی اضطراری» برای ژورنال ناتمام یا خراب | `ui/bench_flash_panel.py`, `ui/main_window.py` |
 | سیم‌کشی داشبورد در لایه app (تنظیمات، لاگ، رجیستری آداپتور) | `src/iran_obd_tuner/app/dashboard.py` + `app/gui_main.py` |
 | داشبورد گرافیکی PySide6: گیج‌ها، نمودار زنده، کدهای خطا، شناسایی خودرو، لاگ، دو زبان (فارسی/انگلیسی) | `src/iran_obd_tuner/ui/` |
 | دکمه بازخوانی درگاه‌های سریال در نوار ابزار | `src/iran_obd_tuner/ui/main_window.py` |
@@ -92,6 +98,9 @@
 - ROM نمایشی میز کار (`tuning/demo.py`، ۶۴ کیلوبایت) در کد ساخته می‌شود و سرآیندش می‌گوید
   `SIMULATED-DEMO-ROM / NOT AN ECU IMAGE`؛ تعریف نقشه‌هایش (`tuning/data/demo_maps.json`) هیچ آفست
   واقعی هیچ ECU را توصیف نمی‌کند. پروژه هیچ تعریف نقشه واقعی برای خودروهای ایرانی ندارد.
+- ECU برنامه‌پذیر مجازی فلش Bench (`hardware/uds_sim_programmable.py`) فقط روی باس `virtual` در همان
+  پروسه پاسخ می‌دهد؛ هویتش `SIM-...` و seed-key آن یک XOR منتشرشده است. پشتیبان‌ها با پیشوند
+  `SIMULATED-` ذخیره می‌شوند و حالت ECU مجازی در `SIMULATED-bench-ecu-state.json` می‌ماند.
 
 ### برنامه‌ریزی‌شده (پیاده‌سازی نشده — بدون ادعای پشتیبانی)
 
@@ -105,7 +114,7 @@
 | خواندن DIDهای غیراستاندارد و شناسه‌های CAN ویژه خودروهای ایرانی | ۳ | منبع مستند، نه حدس |
 | پر کردن ادعاهای «نامعلوم» پایگاه دانش (پروتکل درگاه OBD، شناسه‌های CAN، خانواده ECU) و ارتقای آن‌ها به `verified` | ۳ | بسته شواهد میدانی از خودروی واقعی |
 | تعریف نقشه و چک‌سام واقعی برای یک خانواده ECU ایرانی (طرح‌های چندبخشی/اختصاصی چک‌سام، Intel HEX/S-record) | ۴ | شواهد مستند، نه حدس |
-| خواندن ROM از ECU روی Bench، فلش و مکانیزم بازگردانی | ۵ | **قفل** — تأیید صریح، مسیر کنترل‌شده و ECU آزمایشگاهی |
+| خواندن ROM و فلش روی **ECU واقعی** روی Bench (مسیر شبیه‌سازی‌شده در Milestone 7 پیاده شده است) | ۵ | **قفل** — profile مستند هدف، `SeedKeyProvider` مجاز، رابط CAN، ECU آزمایشگاهی و تأیید جداگانه صاحب پروژه |
 
 **هیچ‌کدام از موارد «برنامه‌ریزی‌شده» در این نسخه کد ندارند.** آداپتورهای اعلام‌شده در
 `hardware/registry.py` با `implemented=False` ثبت شده‌اند و درخواست آن‌ها با خطای صریح
@@ -176,7 +185,10 @@ declared adapters: 3 (1 implemented)
 - پیش‌نیازهای هر نوشتن آینده در `tuning/interfaces.py` (`BenchSafetyChecklist`) فهرست شده‌اند.
 - **میز کار ROM (فاز ۴) فقط روی فایل کار می‌کند:** فایل اصلی فقط خوانده می‌شود و در حافظه تغییرناپذیر
   است؛ خروجی اصلاح‌شده فقط به مسیر دیگری نوشته می‌شود (با تأیید صریح، چک‌سام معتبر و مانیفست). این
-  فایل برای هیچ ECU تأیید نشده و برنامه هیچ راهی برای فلش کردن آن ندارد (فاز ۵ قفل است).
+  فایل برای هیچ ECU تأیید نشده است.
+- **فلش Bench (فاز ۵، Milestone 7) فقط روی ECU مجازی است:** `BenchTargetProfile` غیرشبیه‌سازی‌شده هنگام
+  ساخت رد می‌شود و لینک فقط `virtual-sim-programmable` را می‌پذیرد. فرایند، ژورنال، بازیابی و شرایط
+  باز شدن مسیر ECU واقعی در [`docs/bench-flash-protocol.md`](docs/bench-flash-protocol.md) آمده است.
 
 ## پیش‌نیازها
 
@@ -186,7 +198,8 @@ declared adapters: 3 (1 implemented)
   گرافیکی خودکار skip می‌شوند.
 - برای آداپتور واقعی: آداپتور ELM327 سازگار (USB/سریال)، `[obd]` (pyserial) و انتخاب صریح درگاه.
   این مسیر هنوز روی سخت‌افزار واقعی **اعتبارسنجی نشده** است.
-- برای Bench (فاز ۴+، هنوز پیاده نشده): رابط CAN (SocketCAN/PCAN/Kvaser) و منبع تغذیه پایدار ECU.
+- برای فلش Bench شبیه‌سازی‌شده: `[can]` (python-can، برای باس virtual داخل پروسه). ECU یا رابط
+  واقعی لازم نیست و پشتیبانی هم نمی‌شود.
 
 ## نصب
 
@@ -246,6 +259,10 @@ iran-obd-tuner vehicles match --report output/report.json --uds output/ecu.json 
 iran-obd-tuner bench demo --output output/demo          # ROM نمایشی شبیه‌سازی‌شده + تعریف نقشه‌ها
 iran-obd-tuner bench inspect output/demo/simulated_demo_rom.bin --maps output/demo/simulated_demo_maps.json
 iran-obd-tuner bench table dump.bin --maps defs.json --map demo_fuel_base --json   # فقط‌خواندنی
+iran-obd-tuner bench flash-sim --output output/bench    # فلش Bench فقط روی ECU مجازی (نیازمند [can])
+iran-obd-tuner bench flash-sim --output output/bench --fault power-loss-at-block=20   # خروج با کد ۳
+iran-obd-tuner bench journal show output/bench          # clean / stale / dirty / corrupt
+iran-obd-tuner bench flash-sim --output output/bench --recover
 
 # داشبورد گرافیکی (نیازمند extras به نام gui)
 iran-obd-tuner-gui
@@ -253,7 +270,8 @@ iran-obd-tuner-gui
 ```
 
 همین دستورات CLI با `python -m iran_obd_tuner <command>` هم کار می‌کنند.
-کدهای خروجی: `0` موفق، `1` خطای اجرا، `2` خطای کاربرد/پیکربندی، `130` قطع با Ctrl+C.
+کدهای خروجی: `0` موفق، `1` خطای اجرا، `2` خطای کاربرد/پیکربندی، `3` (فقط `bench flash-sim`)
+ژورنال ناتمام و نیاز به بازیابی، `130` قطع با Ctrl+C.
 
 در داشبورد: حالت «شبیه‌سازی» را انتخاب کنید و «اتصال» را بزنید تا بدون آداپتور، گیج‌ها و
 نمودار زنده کار کنند. پارامتری که خوانده نشود با «—» و دلیلش (مثلاً «پشتیبانی نمی‌شود»)
@@ -347,7 +365,10 @@ iran-obd-tuner/
 - **فاز ۴ (تحلیل آفلاین انجام‌شده):** Milestone 6: بارگذاری فقط‌خواندنی فایل ROM، تعریف نقشه با منبع،
   ویرایش جدول با Undo/Redo، موتور چک‌سام و خروجی غیرمخرب به فایلی دیگر، CLI `bench` و تب داشبورد. هیچ
   ارتباطی با ECU وجود ندارد؛ تعریف نقشه واقعی برای خودروهای ایرانی هنوز نیست.
-- **فاز ۵ (قفل):** خواندن/فلش Bench با پشتیبان‌گیری اجباری و بازگردانی (نیازمند تأیید صریح)
+- **فاز ۵ (شبیه‌سازی انجام‌شده؛ ECU واقعی قفل):** Milestone 7 (با تأیید صاحب پروژه): قرارداد و
+  capabilityها، ECU برنامه‌پذیر مجازی با تزریق خطا، برنامه‌ریز Bench، پشتیبان و ژورنال و بازیابی، CLI
+  `bench flash-sim` و پنل داشبورد با بنر بازیابی اضطراری. کار روی ECU واقعی نیازمند profile مستند و
+  تأیید جداگانه است.
 - **فازهای بعدی:** فلش از طریق OBD (فقط خانواده‌های کاملاً تست‌شده) و پشتیبانی هیبریدی
 
 ## مشارکت‌کنندگان
